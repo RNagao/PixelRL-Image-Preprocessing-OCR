@@ -14,7 +14,7 @@ class Trainer(mp.Process):
     def __init__(self,
                 process_idx: int,
                 agent: PixelWiseAgent,
-                optimizer: torch.optim.Optimizer,
+                # optimizer: torch.optim.Optimizer,
                 X,
                 y,
                 n_episodes: int,
@@ -30,7 +30,7 @@ class Trainer(mp.Process):
 
         self.process_idx = process_idx
         self.agent = agent
-        self.optimizer = optimizer
+        # self.optimizer = optimizer
         self.X = X
         self.y = y
         self.n_episodes = n_episodes
@@ -63,12 +63,12 @@ class Trainer(mp.Process):
             for t in range(0, self.episode_size):
                 print(f"[{self.process_idx}] Episode {episode} step {t}")
                 reward = self._calculate_reward(t)
-                avg_max_reward = np.mean(reward) if np.mean(reward) > avg_max_reward else avg_max_reward
-                action = self.agent.act_and_train(torch.from_numpy(self.state.image).to(self.device), torch.from_numpy(reward).to(self.device), process_idx=self.process_idx)
+                avg_max_reward = torch.mean(reward) if torch.mean(reward) > avg_max_reward else avg_max_reward
+                action = self.agent.act_and_train(torch.from_numpy(self.state.image).to(self.device), reward, process_idx=self.process_idx)
                 self.state.step(action)
 
-            self.agent.stop_episode_and_train(torch.from_numpy(self.state.image).to(self.device), torch.from_numpy(reward).to(self.device), True, process_idx=self.process_idx)
-            self.optimizer.lr = self.lr*((1-episode/self.n_episodes)**0.9)
+            self.agent.stop_episode_and_train(torch.from_numpy(self.state.image).to(self.device), reward, True, process_idx=self.process_idx)
+            # self.agent.optimizer.lr = self.lr*((1-episode/self.n_episodes)**0.9)
             print(f"[{self.process_idx}] Local train avg max reward: {avg_max_reward}")
             self.agent.update_train_avg_reward(avg_max_reward)
             print(f"[{self.process_idx}] Global train avg max reward: {self.agent.get_train_avg_reward()}")
@@ -77,4 +77,4 @@ class Trainer(mp.Process):
         image_words = [read_image_array_words(self.state.image[b, 0]) for b in range(self.batch_size)]
         reading_rewards = [ 100 / (compare_strings_levenshtein(image_words[b], self.y[b]) + 1) for b in range(self.batch_size)]
         reward = [r*np.power(self.gamma, t) for r in reading_rewards]
-        return np.array(reward)
+        return torch.tensor(reward, device=self.device)

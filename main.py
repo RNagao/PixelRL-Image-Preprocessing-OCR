@@ -34,7 +34,7 @@ def main():
     IMG_SIZE = (481, 321)
     BATCH_SIZE = 16
     # NUM_WORKERS = os.cpu_count()
-    NUM_WORKERS = 3
+    NUM_WORKERS = 1
 
     INPUT_SHAPE = 1
     N_ACTIONS = 14
@@ -47,9 +47,10 @@ def main():
     EPISODE_SIZE=3
     N_EPISODES =2
 
+    mp.set_start_method('spawn', force=True)
+
     # device agnostic code
     # device = "cuda" if torch.cuda.is_available() else "cpu"
-    mp.set_start_method('spawn')
     device = "cpu"
 
     # Create dataloaders
@@ -64,6 +65,7 @@ def main():
                 input_shape=INPUT_SHAPE,
                 hidden_units=HIDDEN_UNITS,
                 output_shape=OUTPUT_SHAPE).to(device)
+    fcn.share_memory()
 
     # print("\n\nMODEL SUMMARY")
     # summary(model=fcn,
@@ -75,10 +77,12 @@ def main():
 
     # setup optimizer
     optimizer = ShareAdam(params=fcn.parameters(), lr=LEARNING_RATE)
+    # optimizer = torch.optim.Adam(params=fcn.parameters(), lr=LEARNING_RATE)
 
     # setup agent
     agent = PixelWiseAgent(model=fcn,
                             optimizer=optimizer,
+                            lr=LEARNING_RATE,
                             t_max=EPISODE_SIZE,
                             gamma=GAMMA,
                             batch_size=BATCH_SIZE,
@@ -93,14 +97,14 @@ def main():
     print(f"TEST DATALOADER SIZE: {len(test_dataloader)}\n")
 
     torch.cuda.empty_cache()
+    fcn.train()
 
-    p_count = 0
     workers = []
     for b, (X, y) in enumerate(train_dataloader):
         workers.append(Trainer(
                         process_idx=b,
                         agent=agent,
-                        optimizer=optimizer,
+                        # optimizer=optimizer,
                         X=X,
                         y=y,
                         n_episodes=N_EPISODES,
@@ -113,53 +117,88 @@ def main():
                         device=device,
                         logger=logger
                     ))
-        p_count += 1
-        if p_count == NUM_WORKERS:
+        if len(workers) >= NUM_WORKERS:
             [w.start() for w in workers]
             [w.join() for w in workers]
-            p_count = 0
+            killed_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode != 0]
             workers = []
             torch.cuda.empty_cache()
-
-    if len(train_dataloader) % NUM_WORKERS != 0:
-        [w.start() for w in workers]
-        [w.join() for w in workers]
-        p_count = 0
-        workers = []
-        torch.cuda.empty_cache()
-
-    p_count=0
-    workers=[]
-    for b, (X, y) in enumerate(test_dataloader):
-        workers.append(Tester(
+            if killed_processes:
+                workers = [Trainer(
                         process_idx=b,
                         agent=agent,
-                        X=X,
-                        y=y,
+                        # optimizer=optimizer,
+                        X=w.X,
+                        y=w.y,
+                        n_episodes=N_EPISODES,
                         episode_size=EPISODE_SIZE,
+                        lr=LEARNING_RATE,
                         gamma=GAMMA,
                         move_range=MOVE_RANGE,
                         img_size=IMG_SIZE,
                         batch_size=BATCH_SIZE,
                         device=device,
                         logger=logger
-                    ))
-        if p_count < NUM_WORKERS:
-            p_count += 1
-        else:
-            [w.start() for w in workers]
-            [w.join() for w in workers]
-            p_count = 0
-            workers = []
+                    )
+                    for b, w in killed_processes]
 
-            torch.cuda.empty_cache()
-
-    if len(test_dataloader) % NUM_WORKERS != 0:
+    while len(workers) > 0:
         [w.start() for w in workers]
         [w.join() for w in workers]
-        p_count = 0
-        workers = []
         torch.cuda.empty_cache()
+        killed_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode != 0]
+        workers = []
+        if killed_processes:
+                workers = [Trainer(
+                        process_idx=b,
+                        agent=agent,
+                        # optimizer=optimizer,
+                        X=w.X,
+                        y=w.y,
+                        n_episodes=N_EPISODES,
+                        episode_size=EPISODE_SIZE,
+                        lr=LEARNING_RATE,
+                        gamma=GAMMA,
+                        move_range=MOVE_RANGE,
+                        img_size=IMG_SIZE,
+                        batch_size=BATCH_SIZE,
+                        device=device,
+                        logger=logger
+                    )
+                    for b, w in killed_processes]
+
+    # p_count=0
+    # workers=[]
+    # for b, (X, y) in enumerate(test_dataloader):
+    #     workers.append(Tester(
+    #                     process_idx=b,
+    #                     agent=agent,
+    #                     X=X,
+    #                     y=y,
+    #                     episode_size=EPISODE_SIZE,
+    #                     gamma=GAMMA,
+    #                     move_range=MOVE_RANGE,
+    #                     img_size=IMG_SIZE,
+    #                     batch_size=BATCH_SIZE,
+    #                     device=device,
+    #                     logger=logger
+    #                 ))
+    #     if p_count < NUM_WORKERS:
+    #         p_count += 1
+    #     else:
+    #         [w.start() for w in workers]
+    #         [w.join() for w in workers]
+    #         p_count = 0
+    #         workers = []
+
+    #         torch.cuda.empty_cache()
+
+    # if len(test_dataloader) % NUM_WORKERS != 0:
+    #     [w.start() for w in workers]
+    #     [w.join() for w in workers]
+    #     p_count = 0
+    #     workers = []
+    #     torch.cuda.empty_cache()
 
 
     print(f"\nTRAIN BEST REWARD: {fcn.train_average_max_reward}\n\nTEST BEST REWARD: {fcn.test_average_max_reward}")

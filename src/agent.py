@@ -10,6 +10,7 @@ class PixelWiseAgent():
                 optimizer: torch.optim.Optimizer,
                 t_max:int,
                 gamma:float,
+                lr: float,
                 logger:logging.Logger,
                 beta:float=1e-2,
                 pi_loss_coef:float=1.0,
@@ -25,9 +26,10 @@ class PixelWiseAgent():
                 img_size:tuple[int,int]=(481, 321),
                 device="cpu"):
         self.shared_model = model
-        self.model = copy.deepcopy(self.shared_model)
+        # self.shared_model = copy.deepcopy(self.shared_model)
         self.optimizer = optimizer
         self.t_max = t_max
+        self.lr = lr
         self.gamma = gamma
         self.beta = beta
         self.pi_loss_coef = pi_loss_coef
@@ -69,23 +71,25 @@ class PixelWiseAgent():
     def update(self, state_var, process_idx=0):
         assert self.t_start < self.t
 
+        pre_train_weights = {}
+        for name, param in self.shared_model.named_parameters():
+            if 'weight' in name:
+                pre_train_weights[name] = param.detach()
+
         if state_var is None:
             R = torch.zeros(size=(self.batch_size, 1, self.img_size[0], self.img_size[1]), requires_grad=True, device=self.device)
         else:
             print(f"[{process_idx}] State var update")
-            self.model.eval()
-            with torch.inference_mode():
-                _, vout = self.model(state_var)
-                R = vout.requires_grad_(True).type(torch.float32).to(self.device)
+            _, vout = self.shared_model(state_var)
+            R = vout.type(torch.float32).to(self.device)
 
         pi_loss = 0
         v_loss = 0
-        self.model.train()
         for i in reversed(range(self.t_start, self.t)):
             R = R * self.gamma
             past_reward = self.past_rewards[i]
             for b in range(self.batch_size):
-                R[b,0] = torch.add(R[b,0], past_reward[b])
+                R[b,0] += past_reward[b]
             if self.use_average_reward:
                 R = R - self.average_reward
             v = self.past_values[i]
@@ -105,6 +109,8 @@ class PixelWiseAgent():
 
             # Accumulate gradients of value function
             v_loss += (v - R) ** 2 / 2
+
+        self.clear_memory()
 
         if self.pi_loss_coef != 1.0:
             pi_loss *= self.pi_loss_coef
@@ -130,35 +136,38 @@ class PixelWiseAgent():
         print(f"[{process_idx}] Loss: {total_loss}")
 
         # Compute gradients using thread-specific model
-        self.model.zero_grad()
-        self.shared_model.zero_grad()
         self.optimizer.zero_grad()
         total_loss.backward()
 
-        for local_params, global_params in zip(self.model.parameters(), self.shared_model.parameters()):
-            global_params._grad = local_params.grad
-
+        # for local_params, global_params in zip(self.shared_model.parameters(), self.shared_model.parameters()):
+        #     if local_params.grad is not None:
+        #         global_params.grad = local_params.grad.clone().detach()
 
         self.optimizer.step()
+        post_train_weights = {}
+        for name, param in self.shared_model.named_parameters():
+            if 'weight' in name:
+                post_train_weights[name] = param.detach()
+
+        # self.shared_model.load_state_dict(self.shared_model.state_dict())
+
+        # print(f"Shared model params atualizado? {pre_train_weights != post_train_weights}")
+
         # if process_idx == 0:
         print(f'[{process_idx}] Update')
-
-        self.clear_memory()
 
         self.t_start = self.t
 
     def act_and_train(self, state_var, reward, process_idx=0):
         # print(f"[{process_idx}] Act and train\nt: {self.t} | t_start: {self.t_start} | t_max: {self.t_max}")
         self.past_rewards[self.t-1] = reward
-        
+
         if self.t - self.t_start == self.t_max:
             self.update(state_var, process_idx=process_idx)
 
         self.past_states[self.t] = state_var
 
-        self.model.eval()
-        with torch.inference_mode():
-            pout, vout = self.model(state_var)
+        pout, vout = self.shared_model(state_var)
 
         dist = Categorical(pout.permute([0, 2, 3, 1]))
         action = dist.sample()
@@ -172,10 +181,10 @@ class PixelWiseAgent():
         return action.cpu().numpy()
 
     def act(self, obs):
-        self.model.eval()
+        self.shared_model.eval()
         with torch.inference_mode():
             state_var = obs.to(self.device)
-            pout, _ = self.model(state_var)
+            pout, _ = self.shared_model(state_var)
             if self.act_deterministically:
                 return torch.argmax(pout).cpu().numpy()
             else:
