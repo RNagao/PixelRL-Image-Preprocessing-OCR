@@ -18,8 +18,13 @@ opencv-python = "*"
 memray = "*"
 multiprocessing-logging = "*"
 chardet = "*"
+chainer = "*"
+torchaudio = "*"
 
 [dev-packages]
 
 [requires]
 python_version = "3.10"
+
+[pipenv]
+allow_prereleases = true

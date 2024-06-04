@@ -1,12 +1,13 @@
 import torch
 import copy
 import logging
+import numpy as np
 from torch.distributions import Categorical
-from src.models import FCN
+from torch.autograd import Variable
 
 class PixelWiseAgent():
     def __init__(self,
-                model:FCN,
+                model:torch.nn.Module,
                 optimizer: torch.optim.Optimizer,
                 t_max:int,
                 gamma:float,
@@ -26,7 +27,7 @@ class PixelWiseAgent():
                 img_size:tuple[int,int]=(481, 321),
                 device="cpu"):
         self.shared_model = model
-        # self.shared_model = copy.deepcopy(self.shared_model)
+        self.model = copy.deepcopy(self.shared_model)
         self.optimizer = optimizer
         self.t_max = t_max
         self.lr = lr
@@ -61,6 +62,28 @@ class PixelWiseAgent():
 
         self.logger = logger
 
+    def update_grad(self, target, source):
+        target_params = dict(target.named_parameters())
+        # print(target_params)
+        for param_name, param in source.named_parameters():
+            if target_params[param_name].grad is None:
+                if param.grad is None:
+                    pass
+                else:
+                    target_params[param_name].grad = param.grad
+            else:
+                if param.grad is None:
+                    target_params[param_name].grad = None
+                else:
+                    target_params[param_name].grad[...] = param.grad
+
+
+    def sync_parameters(self):
+        for m1, m2 in zip(self.model.modules(), self.shared_model.modules()):
+            m1._buffers = m2._buffers.copy()
+        for target_param, param in zip(self.model.parameters(), self.shared_model.parameters()):
+            target_param.detach().copy_(param.detach())
+
     def clear_memory(self):
         self.past_action_log_prob = {}
         self.past_action_entropy = {}
@@ -71,38 +94,31 @@ class PixelWiseAgent():
     def update(self, state_var, process_idx=0):
         assert self.t_start < self.t
 
-        pre_train_weights = {}
-        for name, param in self.shared_model.named_parameters():
-            if 'weight' in name:
-                pre_train_weights[name] = param.detach()
-
         if state_var is None:
-            R = torch.zeros(size=(self.batch_size, 1, self.img_size[0], self.img_size[1]), requires_grad=True, device=self.device)
+            R = torch.zeros(size=(self.batch_size, 1, self.img_size[0], self.img_size[1]), device=self.device)
         else:
             print(f"[{process_idx}] State var update")
-            _, vout = self.shared_model(state_var)
-            R = vout.type(torch.float32).to(self.device)
+            _, vout = self.model.pi_and_v(state_var)
+            R = vout.detach().to(self.device)
 
         pi_loss = 0
         v_loss = 0
         for i in reversed(range(self.t_start, self.t)):
-            R = R * self.gamma
-            past_reward = self.past_rewards[i]
-            for b in range(self.batch_size):
-                R[b,0] += past_reward[b]
+            R *= self.gamma
+            R += torch.from_numpy(self.past_rewards[i][:, np.newaxis, np.newaxis, np.newaxis]).to(self.device)
             if self.use_average_reward:
                 R = R - self.average_reward
             v = self.past_values[i]
-            advantage = R - v
+            advantage = R - v.detach()
             if self.use_average_reward:
-                self.average_reward += self.average_reward_tau * float(advantage)
+                self.average_reward += self.average_reward_tau * float(advantage.detach())
 
             # Accumulate gradients of policy
-            log_prob = self.past_action_log_prob[i].unsqueeze(dim=1)
-            entropy = self.past_action_entropy[i].unsqueeze(dim=1)
+            log_prob = self.past_action_log_prob[i]
+            entropy = self.past_action_entropy[i]
 
             # Log probability is increased proportinally to advantage
-            pi_loss -= log_prob * advantage.type(torch.float32)
+            pi_loss -= log_prob * advantage.detach()
 
             # Entropy is maximized
             pi_loss -= self.beta * entropy
@@ -110,56 +126,49 @@ class PixelWiseAgent():
             # Accumulate gradients of value function
             v_loss += (v - R) ** 2 / 2
 
-        self.clear_memory()
-
         if self.pi_loss_coef != 1.0:
-            pi_loss *= self.pi_loss_coef
+            pi_loss = pi_loss * self.pi_loss_coef
 
         if self.v_loss_coef != 1.0:
-            v_loss *= self.v_loss_coef
+            v_loss = v_loss * self.v_loss_coef
 
         # Normalize the loss of sequences truncated by terminal states
         if self.keep_loss_scale_same and self.t - self.t_start < self.t_max:
             factor = self.t_max / (self.t - self.t_start)
-            pi_loss *= factor
-            v_loss *= factor
+            pi_loss = pi_loss * factor
+            v_loss = v_loss * factor
 
         if self.normalize_grad_by_t_max:
-            pi_loss /= self.t - self.t_start
-            v_loss /= self.t - self.t_start
+            pi_loss = pi_loss/(self.t - self.t_start)
+            v_loss = v_loss/(self.t - self.t_start)
 
         # if process_idx == 0:
         #   print(f"\npi_loss:\n{pi_loss}\n\nv_loss:\n{v_loss}")
 
-        total_loss = torch.mean(pi_loss + v_loss.reshape(pi_loss.shape))
-        self.loss_tracking.append(total_loss)
+        total_loss = (pi_loss + v_loss).mean()
+        #self.loss_tracking.append(total_loss)
         print(f"[{process_idx}] Loss: {total_loss}")
 
         # Compute gradients using thread-specific model
         self.optimizer.zero_grad()
         total_loss.backward()
-
-        # for local_params, global_params in zip(self.shared_model.parameters(), self.shared_model.parameters()):
-        #     if local_params.grad is not None:
-        #         global_params.grad = local_params.grad.clone().detach()
-
         self.optimizer.step()
-        post_train_weights = {}
-        for name, param in self.shared_model.named_parameters():
-            if 'weight' in name:
-                post_train_weights[name] = param.detach()
 
-        # self.shared_model.load_state_dict(self.shared_model.state_dict())
+        self.update_grad(self.shared_model, self.model)
+        self.sync_parameters()
 
-        # print(f"Shared model params atualizado? {pre_train_weights != post_train_weights}")
-
-        # if process_idx == 0:
         print(f'[{process_idx}] Update')
+
+        self.model.load_state_dict(self.shared_model.state_dict())
+        self.clear_memory()
 
         self.t_start = self.t
 
     def act_and_train(self, state_var, reward, process_idx=0):
         # print(f"[{process_idx}] Act and train\nt: {self.t} | t_start: {self.t_start} | t_max: {self.t_max}")
+
+        state_var = torch.from_numpy(state_var).to(self.device)
+
         self.past_rewards[self.t-1] = reward
 
         if self.t - self.t_start == self.t_max:
@@ -167,18 +176,25 @@ class PixelWiseAgent():
 
         self.past_states[self.t] = state_var
 
-        pout, vout = self.shared_model(state_var)
+        pout, vout, inner_state = self.model.pi_and_v(state_var)
+        n, num_actions, h, w = pout.shape
 
-        dist = Categorical(pout.permute([0, 2, 3, 1]))
+        p_trans = pout.permute([0, 2, 3, 1])
+        dist = Categorical(p_trans)
         action = dist.sample()
+        log_p = torch.log(torch.clamp(p_trans, min=1e-9, max=1-1e-9))
+        log_action_prob = torch.gather(log_p, 1, Variable(action.unsqueeze(-1))).view(n, 1, h, w)
+        entropy = -torch.sum(p_trans * log_p, dim=-1).view(n, 1, h, w)
 
-        self.past_action_log_prob[self.t] = dist.log_prob(action)
-        self.past_action_entropy[self.t] = dist.entropy()
+        # self.past_action_log_prob[self.t] = dist.log_prob(action).unsqueeze(dim=1).to(self.device)
+        # self.past_action_entropy[self.t] = dist.entropy().unsqueeze(dim=1).to(self.device)
+        self.past_action_log_prob[self.t] = log_action_prob
+        self.past_action_entropy[self.t] = entropy
         self.past_values[self.t] = vout
 
         self.t += 1
 
-        return action.cpu().numpy()
+        return action.detach().cpu().numpy(), inner_state.detach().cpu(), torch.exp(log_action_prob).detach().cpu()
 
     def act(self, obs):
         self.shared_model.eval()
@@ -186,10 +202,10 @@ class PixelWiseAgent():
             state_var = obs.to(self.device)
             pout, _ = self.shared_model(state_var)
             if self.act_deterministically:
-                return torch.argmax(pout).cpu().numpy()
+                return torch.argmax(pout.detach()).cpu().numpy()
             else:
                 dist = Categorical(pout.permute([0, 2, 3, 1]))
-                return dist.sample().cpu().numpy()
+                return dist.sample().detach().cpu().numpy()
 
     def stop_episode_and_train(self, state_var, reward, done=False, process_idx=0):
         print(f'[{process_idx}] Stop and Train')
@@ -205,15 +221,3 @@ class PixelWiseAgent():
             "average_value": self.average_value,
             "average_entropy": self.average_entropy
         }
-
-    def update_train_avg_reward(self, r):
-        self.shared_model.update_train_avg_reward(r)
-
-    def update_test_avg_reward(self, r):
-        self.shared_model.update_test_avg_reward(r)
-
-    def get_train_avg_reward(self):
-        return self.shared_model.train_average_max_reward
-
-    def get_test_avg_reward(self):
-        return self.shared_model.test_average_max_reward

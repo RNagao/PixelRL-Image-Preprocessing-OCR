@@ -2,56 +2,63 @@ import os
 import logging
 import torch
 import torch.multiprocessing as mp
+import numpy as np
+import time
 import multiprocessing_logging
 from torchinfo import summary
 from logging import getLogger
+from pathlib import Path
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-from src.models import FCN
+from src.models import *
 from src.agent import PixelWiseAgent
 from src.dataset import create_datasets, create_dataloaders
 from src.train import Trainer
 from src.test import Tester
-from src.share_optim import ShareAdam
+from src.share_optim import SharedAdam
 from src.state import State
+from src.utils import save_model
 
 def main():
     # Setup logger
     multiprocessing_logging.install_mp_handler()
     logger = mp.get_logger()
-    console = logging.StreamHandler()
-    formatter = logging.Formatter('%(name)-16s: %(filename)s %(levelname)-8s %(message)s')
-    console.setFormatter(formatter)
-    logger.addHandler(console)
+    # console = logging.StreamHandler()
+    # formatter = logging.Formatter('%(name)-16s: %(filename)s %(levelname)-8s %(message)s')
+    # console.setFormatter(formatter)
+    # logger.addHandler(console)
 
-    file_handler = logging.FileHandler(f"logger.log", "w")
-    file_handler.setFormatter(logging.Formatter(fmt="%(asctime)s %(levelname)s\t%(message)s"))
-    logger.addHandler(file_handler)
+    # file_handler = logging.FileHandler(f"logger.log", "w")
+    # file_handler.setFormatter(logging.Formatter(fmt="%(asctime)s %(levelname)s\t%(message)s"))
+    # logger.addHandler(file_handler)
 
-    logger.setLevel(logging.DEBUG)
+    # logger.setLevel(logging.DEBUG)
 
     # Hyperparams
-    IMG_SIZE = (481, 321)
-    BATCH_SIZE = 16
-    # NUM_WORKERS = os.cpu_count()
-    NUM_WORKERS = 1
+    IMG_SIZE = (297, 210)
+    BATCH_SIZE = 32
+    NUM_WORKERS = 4
+    NUM_WORKERS = 5
 
     INPUT_SHAPE = 1
-    N_ACTIONS = 14
+    N_ACTIONS = 9
     MOVE_RANGE = 3 # number of actions that move pixel values
     HIDDEN_UNITS = 64
     OUTPUT_SHAPE = INPUT_SHAPE
 
     LEARNING_RATE = 0.001
     GAMMA = 0.95
-    EPISODE_SIZE=3
-    N_EPISODES =2
+    EPISODE_SIZE= 3
+    N_EPISODES = 10
+
+    MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
+    TARGET_DIR = f"./models/{MODEL_NAME}"
 
     mp.set_start_method('spawn', force=True)
 
     # device agnostic code
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
     device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create dataloaders
     train_dataset, test_dataset = create_datasets(IMG_SIZE, image_channels=INPUT_SHAPE)
@@ -62,33 +69,25 @@ def main():
 
     # create model
     fcn = FCN(n_actions=N_ACTIONS,
-                input_shape=INPUT_SHAPE,
-                hidden_units=HIDDEN_UNITS,
-                output_shape=OUTPUT_SHAPE).to(device)
+               num_channels=INPUT_SHAPE,
+               hidden_units=HIDDEN_UNITS).to(device)
+    fcn.load_state_dict(torch.load("./torch_initweight/sig25_gray.pth"))
+    
     fcn.share_memory()
 
-    # print("\n\nMODEL SUMMARY")
+    print("\n\nMODEL SUMMARY")
     # summary(model=fcn,
     #     input_size=(1, 1, IMG_SIZE[0], IMG_SIZE[1]),
     #     col_names=["input_size", "output_size", "num_params", "trainable"],
-    #     col_width=20,
+    #     # col_width=20,
     #     row_settings=["var_names"],
     #     device=device)
 
     # setup optimizer
-    optimizer = ShareAdam(params=fcn.parameters(), lr=LEARNING_RATE)
-    # optimizer = torch.optim.Adam(params=fcn.parameters(), lr=LEARNING_RATE)
+    optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
+    optimizer.share_memory()
 
     # setup agent
-    agent = PixelWiseAgent(model=fcn,
-                            optimizer=optimizer,
-                            lr=LEARNING_RATE,
-                            t_max=EPISODE_SIZE,
-                            gamma=GAMMA,
-                            batch_size=BATCH_SIZE,
-                            img_size=IMG_SIZE,
-                            device=device,
-                            logger=logger)
 
     # train
     print(f"\nTRAINNING DEVICE: {device}")
@@ -96,112 +95,111 @@ def main():
     print(f"TRAIN DATALOADER SIZE: {len(train_dataloader)}")
     print(f"TEST DATALOADER SIZE: {len(test_dataloader)}\n")
 
-    torch.cuda.empty_cache()
     fcn.train()
 
-    workers = []
-    for b, (X, y) in enumerate(train_dataloader):
-        workers.append(Trainer(
-                        process_idx=b,
-                        agent=agent,
-                        # optimizer=optimizer,
-                        X=X,
-                        y=y,
-                        n_episodes=N_EPISODES,
-                        episode_size=EPISODE_SIZE,
-                        lr=LEARNING_RATE,
-                        gamma=GAMMA,
-                        move_range=MOVE_RANGE,
-                        img_size=IMG_SIZE,
-                        batch_size=BATCH_SIZE,
-                        device=device,
-                        logger=logger
-                    ))
-        if len(workers) >= NUM_WORKERS:
-            [w.start() for w in workers]
-            [w.join() for w in workers]
-            killed_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode != 0]
-            workers = []
-            torch.cuda.empty_cache()
-            if killed_processes:
-                workers = [Trainer(
-                        process_idx=b,
-                        agent=agent,
-                        # optimizer=optimizer,
-                        X=w.X,
-                        y=w.y,
-                        n_episodes=N_EPISODES,
-                        episode_size=EPISODE_SIZE,
-                        lr=LEARNING_RATE,
-                        gamma=GAMMA,
-                        move_range=MOVE_RANGE,
-                        img_size=IMG_SIZE,
-                        batch_size=BATCH_SIZE,
-                        device=device,
-                        logger=logger
-                    )
-                    for b, w in killed_processes]
+    global_avg_train_rewards = mp.Array('d', len(train_dataloader))
+    global_avg_test_rewards = mp.Array('d', len(train_dataloader))
 
-    while len(workers) > 0:
-        [w.start() for w in workers]
-        [w.join() for w in workers]
+    train_start = time.time()
+    fcn, ep = load_checkpoint(TARGET_DIR, fcn)
+
+    while ep < N_EPISODES:
+        process_not_completed = [i for i in range(len(train_dataloader))]
         torch.cuda.empty_cache()
-        killed_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode != 0]
-        workers = []
-        if killed_processes:
-                workers = [Trainer(
-                        process_idx=b,
-                        agent=agent,
-                        # optimizer=optimizer,
-                        X=w.X,
-                        y=w.y,
-                        n_episodes=N_EPISODES,
-                        episode_size=EPISODE_SIZE,
-                        lr=LEARNING_RATE,
-                        gamma=GAMMA,
-                        move_range=MOVE_RANGE,
-                        img_size=IMG_SIZE,
-                        batch_size=BATCH_SIZE,
-                        device=device,
-                        logger=logger
-                    )
-                    for b, w in killed_processes]
+        while len(process_not_completed) > 0:
+            workers = []
+            for b, (X, y) in enumerate(train_dataloader):
+                if b in process_not_completed:
+                    if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+                        [w.start() for w in workers]
+                        [w.join() for w in workers]
+                        success_processes = [i for i, w in enumerate(workers) if w.exitcode == 0]
+                        workers = []
+                        torch.cuda.empty_cache()
+                        if success_processes:
+                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
+                            success_processes = []
 
-    # p_count=0
-    # workers=[]
-    # for b, (X, y) in enumerate(test_dataloader):
-    #     workers.append(Tester(
-    #                     process_idx=b,
-    #                     agent=agent,
-    #                     X=X,
-    #                     y=y,
-    #                     episode_size=EPISODE_SIZE,
-    #                     gamma=GAMMA,
-    #                     move_range=MOVE_RANGE,
-    #                     img_size=IMG_SIZE,
-    #                     batch_size=BATCH_SIZE,
-    #                     device=device,
-    #                     logger=logger
-    #                 ))
-    #     if p_count < NUM_WORKERS:
-    #         p_count += 1
-    #     else:
-    #         [w.start() for w in workers]
-    #         [w.join() for w in workers]
-    #         p_count = 0
-    #         workers = []
+                    workers.append(Trainer(
+                                    process_idx=b,
+                                    model=fcn,
+                                    optimizer=optimizer,
+                                    X=X,
+                                    y=y,
+                                    n_episodes=ep,
+                                    episode_size=EPISODE_SIZE,
+                                    lr=LEARNING_RATE,
+                                    gamma=GAMMA,
+                                    move_range=MOVE_RANGE,
+                                    img_size=IMG_SIZE,
+                                    batch_size=BATCH_SIZE,
+                                    device=device,
+                                    logger=logger,
+                                    model_hidden_units=HIDDEN_UNITS,
+                                    global_avg_train_rewards=global_avg_train_rewards
+                            ))
+        save_model(model=fcn,
+               target_dir=TARGET_DIR,
+               model_name=f"checkpoint_{ep}.pth")
+        print(f"SAVED CHECKPOINT {ep}")
+        ep += 1
+    train_stop = time.time()
 
-    #         torch.cuda.empty_cache()
+    workers=[]
+    process_not_completed = [i for i in range(len(train_dataloader))]
+    torch.cuda.empty_cache()
+    while process_not_completed:
+        for b, (X, y) in enumerate(test_dataloader):
+            if b in process_not_completed:
+                if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+                        [w.start() for w in workers]
+                        [w.join() for w in workers]
+                        success_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode == 0]
+                        workers = []
+                        torch.cuda.empty_cache()
+                        if success_processes:
+                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
 
-    # if len(test_dataloader) % NUM_WORKERS != 0:
-    #     [w.start() for w in workers]
-    #     [w.join() for w in workers]
-    #     p_count = 0
-    #     workers = []
-    #     torch.cuda.empty_cache()
+                workers.append(Tester(
+                                process_idx=b,
+                                model=fcn,
+                                optimizer=optimizer,
+                                X=X,
+                                y=y,
+                                episode_size=EPISODE_SIZE,
+                                lr=LEARNING_RATE,
+                                gamma=GAMMA,
+                                move_range=MOVE_RANGE,
+                                img_size=IMG_SIZE,
+                                batch_size=BATCH_SIZE,
+                                device=device,
+                                logger=logger,
+                                global_avg_test_rewards=global_avg_test_rewards
+                            ))
+    test_stop = time.time()
 
+    print(f"\nTRAIN BEST REWARD: {np.mean(global_avg_train_rewards)}\n\nTEST BEST REWARD: {np.mean(global_avg_test_rewards)}")
+    print(f"\nTRAIN TIME: {train_stop - train_start}")
+    print(f"\nTEST TIME: {test_stop - train_stop}")
+    print(f"\nTOTAL TIME: {test_stop - train_start}")
 
-    print(f"\nTRAIN BEST REWARD: {fcn.train_average_max_reward}\n\nTEST BEST REWARD: {fcn.test_average_max_reward}")
+    save_model(model=fcn,
+               target_dir=TARGET_DIR,
+               model_name=MODEL_NAME)
+    
+
+def load_checkpoint(target_dir, model):
+    checkpoints_paths = sorted(list(Path(target_dir).rglob('checkpoint*')))
+    if len(checkpoints_paths) == 0:
+        return model, 0
+
+    last_checkpoint = checkpoints_paths[-1]
+    i = int(last_checkpoint.name.split('_')[-1].split('.')[0]) + 1
+
+    model.load_state_dict(torch.load(last_checkpoint))
+
+    return model, i
+
 
 if __name__ == "__main__":
     main()

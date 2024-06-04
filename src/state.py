@@ -4,14 +4,18 @@ import cv2
 from PIL import Image, ImageEnhance
 
 class State():
-    def __init__(self, size, move_range):
+    def __init__(self, size, move_range, model_hidden_units):
         self.image = np.zeros(size, dtype=np.float32)
         self.move_range = move_range
+        self.hidden_units = model_hidden_units
 
-    def reset(self, x, noise):
-        self.image = x + noise
+    def reset(self, x, n):
+        self.image = np.clip(x + n, a_min=0., a_max=1.)
+        size = self.image.shape
+        prev_state = np.zeros((size[0], self.hidden_units, size[2], size[3]),dtype=np.float32)
+        self.tensor = np.concatenate([self.image, prev_state], axis=1)
 
-    def step(self, act):
+    def step(self, act, inner_state):
         neutral = (self.move_range - 1) / 2
         move = act.astype(np.float32)
         move = (move - neutral) / 255
@@ -20,10 +24,10 @@ class State():
 
         b, c, h, w = self.image.shape
         for i in range(0,b):
-            pil_image = Image.fromarray((self.image[i,0]*255).astype(np.int8)).convert('L')
-            contrast_enhancer = ImageEnhance.Contrast(pil_image)
-            sharpness_enhancer = ImageEnhance.Sharpness(pil_image)
-            brightness_enhancer = ImageEnhance.Brightness(pil_image)
+            # pil_image = Image.fromarray((self.image[i,0]*255).astype(np.int8)).convert('L')
+            # contrast_enhancer = ImageEnhance.Contrast(pil_image)
+            # sharpness_enhancer = ImageEnhance.Sharpness(pil_image)
+            # brightness_enhancer = ImageEnhance.Brightness(pil_image)
 
             if np.sum(act[i] == self.move_range) > 0:
                 action = cv2.GaussianBlur(self.image[i,0], ksize=(5,5), sigmaX=0.5)
@@ -43,26 +47,29 @@ class State():
             if np.sum(act[i] == self.move_range+5) > 0:
                 action = cv2.boxFilter(self.image[i,0], ddepth=-1, ksize=(5,5))
                 moved_image[i,0] = np.where(act[i]==self.move_range+5, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+6) > 0:
-                action = self._pil_to_np(contrast_enhancer.enhance(0.95))
-                moved_image[i,0] = np.where(act[i]==self.move_range+6, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+7) > 0:
-                action = self._pil_to_np(contrast_enhancer.enhance(1.05))
-                moved_image[i,0] = np.where(act[i]==self.move_range+7, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+8) > 0:
-                action = self._pil_to_np(sharpness_enhancer.enhance(0.95))
-                moved_image[i,0] = np.where(act[i]==self.move_range+8, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+9) > 0:
-                action = self._pil_to_np(sharpness_enhancer.enhance(1.05))
-                moved_image[i,0] = np.where(act[i]==self.move_range+9, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+10) > 0:
-                action = self._pil_to_np(brightness_enhancer.enhance(0.95))
-                moved_image[i,0] = np.where(act[i]==self.move_range+10, action, moved_image[i,0])
-            if np.sum(act[i] == self.move_range+11) > 0:
-                action = self._pil_to_np(brightness_enhancer.enhance(1.05))
-                moved_image[i,0] = np.where(act[i]==self.move_range+11, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+6) > 0:
+            #     action = self._pil_to_np(contrast_enhancer.enhance(0.95))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+6, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+7) > 0:
+            #     action = self._pil_to_np(contrast_enhancer.enhance(1.05))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+7, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+8) > 0:
+            #     action = self._pil_to_np(sharpness_enhancer.enhance(0.95))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+8, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+9) > 0:
+            #     action = self._pil_to_np(sharpness_enhancer.enhance(1.05))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+9, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+10) > 0:
+            #     action = self._pil_to_np(brightness_enhancer.enhance(0.95))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+10, action, moved_image[i,0])
+            # if np.sum(act[i] == self.move_range+11) > 0:
+            #     action = self._pil_to_np(brightness_enhancer.enhance(1.05))
+            #     moved_image[i,0] = np.where(act[i]==self.move_range+11, action, moved_image[i,0])
 
         self.image = moved_image
+        self.image = np.clip(self.image, a_min=0., a_max=1.)
+        self.tensor[:, :self.image.shape[1], :, :] = self.image
+        self.tensor[:, -self.hidden_units:, :, :] = inner_state
         # print("Step")
 
     def _pil_to_np(self, pil_image):
