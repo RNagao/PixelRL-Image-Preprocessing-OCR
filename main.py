@@ -35,10 +35,11 @@ def main():
     # logger.setLevel(logging.DEBUG)
 
     # Hyperparams
-    IMG_SIZE = (297, 210)
+    IMG_SIZE = (63, 63)
     BATCH_SIZE = 32
-    NUM_WORKERS = 4
-    NUM_WORKERS = 5
+    NUM_WORKERS = 1
+    # NUM_WORKERS = 15
+    NUM_WORKERS = 30
 
     INPUT_SHAPE = 1
     N_ACTIONS = 9
@@ -48,8 +49,8 @@ def main():
 
     LEARNING_RATE = 0.001
     GAMMA = 0.95
-    EPISODE_SIZE= 3
-    N_EPISODES = 10
+    EPISODE_SIZE= 5
+    N_EPISODES = 30000
 
     MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
     TARGET_DIR = f"./models/{MODEL_NAME}"
@@ -58,7 +59,7 @@ def main():
 
     # device agnostic code
     device = "cpu"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create dataloaders
     train_dataset, test_dataset = create_datasets(IMG_SIZE, image_channels=INPUT_SHAPE)
@@ -103,6 +104,9 @@ def main():
     train_start = time.time()
     fcn, ep = load_checkpoint(TARGET_DIR, fcn)
 
+    # 0: local | 1: koyeb | 2: lambda
+    processes_running = mp.Array('i',3)
+
     while ep < N_EPISODES:
         process_not_completed = [i for i in range(len(train_dataloader))]
         torch.cuda.empty_cache()
@@ -110,16 +114,6 @@ def main():
             workers = []
             for b, (X, y) in enumerate(train_dataloader):
                 if b in process_not_completed:
-                    if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
-                        [w.start() for w in workers]
-                        [w.join() for w in workers]
-                        success_processes = [i for i, w in enumerate(workers) if w.exitcode == 0]
-                        workers = []
-                        torch.cuda.empty_cache()
-                        if success_processes:
-                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
-                            success_processes = []
-
                     workers.append(Trainer(
                                     process_idx=b,
                                     model=fcn,
@@ -136,8 +130,20 @@ def main():
                                     device=device,
                                     logger=logger,
                                     model_hidden_units=HIDDEN_UNITS,
-                                    global_avg_train_rewards=global_avg_train_rewards
+                                    global_avg_train_rewards=global_avg_train_rewards,
+                                    running_processes=processes_running
                             ))
+                    
+                    if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+                        [w.start() for w in workers]
+                        [w.join() for w in workers]
+                        success_processes = [w.process_idx for w in workers if w.exitcode == 0]
+                        print(f"SUCCESS: {success_processes}")
+                        workers = []
+                        torch.cuda.empty_cache()
+                        if success_processes:
+                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
+                            success_processes = []
         save_model(model=fcn,
                target_dir=TARGET_DIR,
                model_name=f"checkpoint_{ep}.pth")

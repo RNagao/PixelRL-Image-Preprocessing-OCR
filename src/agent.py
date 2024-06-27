@@ -91,11 +91,11 @@ class PixelWiseAgent():
         self.past_rewards = {}
         self.past_values = {}
 
-    def update(self, state_var, process_idx=0):
+    def update(self, state_var, batch_size, process_idx=0):
         assert self.t_start < self.t
 
         if state_var is None:
-            R = torch.zeros(size=(self.batch_size, 1, self.img_size[0], self.img_size[1]), device=self.device)
+            R = torch.zeros(size=(batch_size, 1, self.img_size[0], self.img_size[1]), device=self.device)
         else:
             print(f"[{process_idx}] State var update")
             _, vout = self.model.pi_and_v(state_var)
@@ -105,7 +105,8 @@ class PixelWiseAgent():
         v_loss = 0
         for i in reversed(range(self.t_start, self.t)):
             R *= self.gamma
-            R += torch.from_numpy(self.past_rewards[i][:, np.newaxis, np.newaxis, np.newaxis]).to(self.device)
+            reward = self.past_rewards[i]
+            R += torch.from_numpy(reward[:, np.newaxis, np.newaxis, np.newaxis]).to(self.device)
             if self.use_average_reward:
                 R = R - self.average_reward
             v = self.past_values[i]
@@ -166,13 +167,12 @@ class PixelWiseAgent():
 
     def act_and_train(self, state_var, reward, process_idx=0):
         # print(f"[{process_idx}] Act and train\nt: {self.t} | t_start: {self.t_start} | t_max: {self.t_max}")
-
         state_var = torch.from_numpy(state_var).to(self.device)
 
         self.past_rewards[self.t-1] = reward
 
         if self.t - self.t_start == self.t_max:
-            self.update(state_var, process_idx=process_idx)
+            self.update(state_var, len(reward), process_idx=process_idx)
 
         self.past_states[self.t] = state_var
 
@@ -212,9 +212,9 @@ class PixelWiseAgent():
 
         self.past_rewards[self.t-1] =reward
         if done:
-            self.update(None, process_idx=process_idx)
+            self.update(None, len(reward), process_idx=process_idx)
         else:
-            self.update(state_var, process_idx=process_idx)
+            self.update(state_var, len(reward), process_idx=process_idx)
 
     def get_statistics(self):
         return {

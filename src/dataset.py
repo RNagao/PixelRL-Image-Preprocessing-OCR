@@ -52,7 +52,7 @@ class ImageCustomDataset(Dataset):
         return img, self.extract_text_from_assert(index)
 
 
-def create_datasets(img_size: tuple[int, int], image_channels:int, num_augments:int=49):
+def create_datasets(img_size: tuple[int, int], image_channels:int, num_augments:int=5):
     # Construcao dos datasets
     train_datasets = []
     test_datasets = []

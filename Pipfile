@@ -20,6 +20,8 @@ multiprocessing-logging = "*"
 chardet = "*"
 chainer = "*"
 torchaudio = "*"
+requests = "*"
+boto3 = "*"
 
 [dev-packages]
 

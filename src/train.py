@@ -2,14 +2,16 @@ import torch
 import numpy as np
 import logging
 import torch.multiprocessing as mp
-from statistics import fmean
+import requests
+import itertools
+import os, signal
 from tqdm.auto import tqdm
-from typing import Tuple
 from torch import nn
 
 from src.agent import PixelWiseAgent
 from src.state import State
 from src.reader import compare_strings_levenshtein, read_image_array_words
+from src.lambda_client import LambdaClient
 
 class Trainer(mp.Process):
     torch.autograd.set_detect_anomaly(True)
@@ -26,6 +28,7 @@ class Trainer(mp.Process):
                 gamma: float,
                 move_range:int,
                 global_avg_train_rewards,
+                running_processes,
                 logger:logging.Logger,
                 img_size:tuple[int,int]=(481, 321),
                 batch_size:int=32,
@@ -58,9 +61,10 @@ class Trainer(mp.Process):
         self.logger = logger
 
         self.state = State((self.batch_size, 1, self.img_size[0], self.img_size[1]), self.move_range, model_hidden_units=model_hidden_units)
+        self.lambda_client = None
+        self.running_processes = running_processes
 
     def run(self):
-        self.process_idx = self.process_idx
         print(f"[{self.process_idx}] Start Train")
 
         # input image
@@ -75,6 +79,7 @@ class Trainer(mp.Process):
 
         sum_reward = 0
         reward = np.zeros(len(raw_x), raw_x.dtype)
+        prev_dist = self.calculate_levenshtein_dist(self.state.image)
 
         for t in range(0, self.episode_size):
             print(f"[{self.process_idx}] Episode {self.n_episodes} step {t}")
@@ -84,7 +89,8 @@ class Trainer(mp.Process):
 
             self.state.step(action, inner_state)
 
-            reward = self._calculate_reward(reward, self.state.image)
+            # reward = self._calculate_reward(reward, self.state.image)
+            reward, prev_dist = self._calculate_reward(prev_dist, self.state.image)
 
             sum_reward += np.mean(reward) * np.power(self.gamma, t)
 
@@ -93,12 +99,87 @@ class Trainer(mp.Process):
         print(f"[{self.process_idx}] Train total reward: {sum_reward}")
 
 
-        # with self.global_avg_train_rewards.get_lock():
-        #     self.global_avg_train_rewards[self.process_idx] = ep_final_image_total_reward
+        with self.global_avg_train_rewards.get_lock():
+            self.global_avg_train_rewards[self.process_idx] += sum_reward
 
 
-    def _calculate_reward(self, prev_reward, current_image):
+    def _calculate_reward(self, prev_dist, current_image):
+        levenshtein = self.calculate_levenshtein_dist(current_image)
+        reward = prev_dist - levenshtein
+        return reward, levenshtein
+
+    def calculate_levenshtein_dist(self, current_image):
+        print(f"LOAD BALANCE: {self.running_processes[:]}")
+        dist = None
+        while dist is None:
+            if self.running_processes[0] < 3:
+                with self.running_processes.get_lock():
+                    self.running_processes[0] += 1
+                dist = self._local_levenshtein_dist(current_image)
+                with self.running_processes.get_lock():
+                    self.running_processes[0] -= 1
+            elif self.running_processes[1] < 3:
+                with self.running_processes.get_lock():
+                    self.running_processes[1] += 1
+                dist = self._api_koyeb_levenshtein_dist(current_image)
+                with self.running_processes.get_lock():
+                    self.running_processes[1] -= 1
+            elif self.running_processes[2] < 5:
+                with self.running_processes.get_lock():
+                    self.running_processes[2] += 1
+                dist = self._lambda_levenshtein_dist(current_image)
+                with self.running_processes.get_lock():
+                    self.running_processes[2] -= 1
+        return dist
+
+    def _api_koyeb_levenshtein_dist(self, current_image):
+        url = os.getenv('KOYEB_URL') or ''
+
+        levenshtein_dists = []
+        array_size = 4
+        if len(self.y) % array_size != 0:
+            return None
+
+        for i in range(len(self.y) // array_size):
+            value = []
+            while len(value) != array_size:
+                try:
+                    with requests.post(url, json={
+                        "image_array": current_image.tolist()[i*array_size:i*array_size+array_size],
+                        "text_assert": list(self.y)[i*array_size:i*array_size+array_size]
+                    }) as r:
+                        value = r.json().get('result')
+                except requests.exceptions.ChunkedEncodingError as e:
+                    print(e)
+                except requests.exceptions.JSONDecodeError as e:
+                    print(e)
+            levenshtein_dists.extend(value)
+        
+        if len(levenshtein_dists) != len(self.y):
+            return None
+
+        return np.array(levenshtein_dists)
+    
+    def _local_levenshtein_dist(self, current_image):
         image_words = [read_image_array_words(current_image[b, 0]) for b in range(len(current_image))]
-        inverse_levenshtein = [compare_strings_levenshtein(image_words[b], self.y[b]) for b in range(len(current_image))]
-        reward = np.absolute(prev_reward) - np.absolute(np.array(inverse_levenshtein, prev_reward.dtype))
-        return reward
+        levenshtein = [compare_strings_levenshtein(image_words[b], self.y[b]) for b in range(len(current_image))]
+        return np.array(levenshtein)
+    
+    def _lambda_levenshtein_dist(self, current_image):
+        if self.lambda_client is None:
+            self.lambda_client = LambdaClient()
+        
+        payload = {
+            "httpMethod": "POST",
+            "path": "/levenshtein_dist",
+            "queryStringParameters": {},
+            "headers": {
+                "content_type": "application/json"
+            },
+            "data": {
+                "image_array": current_image.tolist(),
+                "text_assert": list(self.y)
+            }
+        }
+        result = self.lambda_client.invoke_lambda(payload)
+        return np.array(result.get('result'))
