@@ -8,12 +8,15 @@ import multiprocessing_logging
 from torchinfo import summary
 from logging import getLogger
 from pathlib import Path
+from tqdm import tqdm
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 from src.models import *
 from src.agent import PixelWiseAgent
 from src.dataset import create_datasets, create_dataloaders
-from src.train import Trainer
+# from src.train import Trainer
+from src.train import train
+
 from src.test import Tester
 from src.share_optim import SharedAdam
 from src.state import State
@@ -36,10 +39,10 @@ def main():
 
     # Hyperparams
     IMG_SIZE = (63, 63)
-    BATCH_SIZE = 32
+    BATCH_SIZE = 31
     NUM_WORKERS = 1
     # NUM_WORKERS = 15
-    NUM_WORKERS = 30
+    # NUM_WORKERS = 30
 
     INPUT_SHAPE = 1
     N_ACTIONS = 9
@@ -58,8 +61,8 @@ def main():
     mp.set_start_method('spawn', force=True)
 
     # device agnostic code
-    device = "cpu"
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create dataloaders
     train_dataset, test_dataset = create_datasets(IMG_SIZE, image_channels=INPUT_SHAPE)
@@ -108,42 +111,62 @@ def main():
     processes_running = mp.Array('i',3)
 
     while ep < N_EPISODES:
-        process_not_completed = [i for i in range(len(train_dataloader))]
-        torch.cuda.empty_cache()
-        while len(process_not_completed) > 0:
-            workers = []
-            for b, (X, y) in enumerate(train_dataloader):
-                if b in process_not_completed:
-                    workers.append(Trainer(
-                                    process_idx=b,
-                                    model=fcn,
-                                    optimizer=optimizer,
-                                    X=X,
-                                    y=y,
-                                    n_episodes=ep,
-                                    episode_size=EPISODE_SIZE,
-                                    lr=LEARNING_RATE,
-                                    gamma=GAMMA,
-                                    move_range=MOVE_RANGE,
-                                    img_size=IMG_SIZE,
-                                    batch_size=BATCH_SIZE,
-                                    device=device,
-                                    logger=logger,
-                                    model_hidden_units=HIDDEN_UNITS,
-                                    global_avg_train_rewards=global_avg_train_rewards,
-                                    running_processes=processes_running
-                            ))
+        for b, (X, y) in tqdm(enumerate(train_dataloader)):
+            train(process_idx=b,
+                    model=fcn,
+                    optimizer=optimizer,
+                    X=X,
+                    y=y,
+                    n_episodes=ep,
+                    episode_size=EPISODE_SIZE,
+                    lr=LEARNING_RATE,
+                    gamma=GAMMA,
+                    move_range=MOVE_RANGE,
+                    img_size=IMG_SIZE,
+                    batch_size=BATCH_SIZE,
+                    device=device,
+                    logger=logger,
+                    model_hidden_units=HIDDEN_UNITS,
+                    global_avg_train_rewards=global_avg_train_rewards,
+                    running_processes=processes_running)
+    
+    #     process_not_completed = [i for i in range(len(train_dataloader))]
+    #     torch.cuda.empty_cache()
+    #     while len(process_not_completed) > 0:
+    #         workers = []
+    #         for b, (X, y) in enumerate(train_dataloader):
+    #             if b in process_not_completed:
+    #                 workers.append(Trainer(
+    #                                 process_idx=b,
+    #                                 model=fcn,
+    #                                 optimizer=optimizer,
+    #                                 X=X,
+    #                                 y=y,
+    #                                 n_episodes=ep,
+    #                                 episode_size=EPISODE_SIZE,
+    #                                 lr=LEARNING_RATE,
+    #                                 gamma=GAMMA,
+    #                                 move_range=MOVE_RANGE,
+    #                                 img_size=IMG_SIZE,
+    #                                 batch_size=BATCH_SIZE,
+    #                                 device=device,
+    #                                 logger=logger,
+    #                                 model_hidden_units=HIDDEN_UNITS,
+    #                                 global_avg_train_rewards=global_avg_train_rewards,
+    #                                 running_processes=processes_running
+    #                         ))
                     
-                    if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
-                        [w.start() for w in workers]
-                        [w.join() for w in workers]
-                        success_processes = [w.process_idx for w in workers if w.exitcode == 0]
-                        print(f"SUCCESS: {success_processes}")
-                        workers = []
-                        torch.cuda.empty_cache()
-                        if success_processes:
-                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
-                            success_processes = []
+    #                 if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+    #                     [w.start() for w in workers]
+    #                     [w.join() for w in workers]
+    #                     success_processes = [w.process_idx for w in workers if w.exitcode == 0]
+    #                     print(f"SUCCESS: {success_processes}")
+    #                     workers = []
+    #                     torch.cuda.empty_cache()
+    #                     if success_processes:
+    #                         process_not_completed = [p for p in process_not_completed if p not in success_processes]
+    #                         success_processes = []
+        print(f"EP train time: {time.time() - train_start}")
         save_model(model=fcn,
                target_dir=TARGET_DIR,
                model_name=f"checkpoint_{ep}.pth")
@@ -201,7 +224,7 @@ def load_checkpoint(target_dir, model):
 
     last_checkpoint = None
     i = 0
-    for checkpoint in checkpoints_paths: 
+    for checkpoint in checkpoints_paths:
         checkpoint_i = int(checkpoint.name.split('_')[-1].split('.')[0]) + 1
         if checkpoint_i > i:
             i = checkpoint_i

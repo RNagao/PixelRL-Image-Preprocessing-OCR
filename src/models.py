@@ -82,6 +82,7 @@ class FCN(nn.Module):
         h_t = (1 - z_t) * ht + z_t * h_title_t
         policy = F.softmax(self.policy(h_t), dim=1)
 
+
         v = self.diconv1_v(conv)
         v = F.relu(v)
         v = self.diconv2_v(v)
