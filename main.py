@@ -199,8 +199,13 @@ def load_checkpoint(target_dir, model):
     if len(checkpoints_paths) == 0:
         return model, 0
 
-    last_checkpoint = checkpoints_paths[-1]
-    i = int(last_checkpoint.name.split('_')[-1].split('.')[0]) + 1
+    last_checkpoint = None
+    i = 0
+    for checkpoint in checkpoints_paths: 
+        checkpoint_i = int(checkpoint.name.split('_')[-1].split('.')[0]) + 1
+        if checkpoint_i > i:
+            i = checkpoint_i
+            last_checkpoint = checkpoint
 
     model.load_state_dict(torch.load(last_checkpoint))
 
