@@ -27,7 +27,7 @@ class PixelWiseAgent():
                 img_size:tuple[int,int]=(481, 321),
                 device="cpu"):
         self.shared_model = model
-        self.model = copy.deepcopy(self.shared_model)
+        # self.model = copy.deepcopy(self.shared_model)
         self.optimizer = optimizer
         self.t_max = t_max
         self.lr = lr
@@ -62,27 +62,27 @@ class PixelWiseAgent():
 
         self.logger = logger
 
-    def update_grad(self, target, source):
-        target_params = dict(target.named_parameters())
-        # print(target_params)
-        for param_name, param in source.named_parameters():
-            if target_params[param_name].grad is None:
-                if param.grad is None:
-                    pass
-                else:
-                    target_params[param_name].grad = param.grad
-            else:
-                if param.grad is None:
-                    target_params[param_name].grad = None
-                else:
-                    target_params[param_name].grad[...] = param.grad
+    # def update_grad(self, target, source):
+    #     target_params = dict(target.named_parameters())
+    #     # print(target_params)
+    #     for param_name, param in source.named_parameters():
+    #         if target_params[param_name].grad is None:
+    #             if param.grad is None:
+    #                 pass
+    #             else:
+    #                 target_params[param_name].grad = param.grad
+    #         else:
+    #             if param.grad is None:
+    #                 target_params[param_name].grad = None
+    #             else:
+    #                 target_params[param_name].grad[...] = param.grad
 
 
-    def sync_parameters(self):
-        for m1, m2 in zip(self.model.modules(), self.shared_model.modules()):
-            m1._buffers = m2._buffers.copy()
-        for target_param, param in zip(self.model.parameters(), self.shared_model.parameters()):
-            target_param.detach().copy_(param.detach())
+    # def sync_parameters(self):
+    #     for m1, m2 in zip(self.model.modules(), self.shared_model.modules()):
+    #         m1._buffers = m2._buffers.copy()
+    #     for target_param, param in zip(self.model.parameters(), self.shared_model.parameters()):
+    #         target_param.detach().copy_(param.detach())
 
     def clear_memory(self):
         self.past_action_log_prob = {}
@@ -98,7 +98,7 @@ class PixelWiseAgent():
             R = torch.zeros(size=(batch_size, 1, self.img_size[0], self.img_size[1]), device=self.device)
         else:
             print(f"[{process_idx}] State var update")
-            _, vout = self.model.pi_and_v(state_var)
+            _, vout = self.shared_model.pi_and_v(state_var)
             R = vout.detach().to(self.device)
 
         pi_loss = 0
@@ -155,12 +155,12 @@ class PixelWiseAgent():
         total_loss.backward()
         self.optimizer.step()
 
-        self.update_grad(self.shared_model, self.model)
-        self.sync_parameters()
+        # self.update_grad(self.shared_model, self.model)
+        # self.sync_parameters()
 
         print(f'[{process_idx}] Update')
 
-        self.model.load_state_dict(self.shared_model.state_dict())
+        self.shared_model.load_state_dict(self.shared_model.state_dict())
         self.clear_memory()
 
         self.t_start = self.t
@@ -176,7 +176,7 @@ class PixelWiseAgent():
 
         self.past_states[self.t] = state_var
 
-        pout, vout, inner_state = self.model.pi_and_v(state_var)
+        pout, vout, inner_state = self.shared_model.pi_and_v(state_var)
         n, num_actions, h, w = pout.shape
 
         p_trans = pout.permute([0, 2, 3, 1])

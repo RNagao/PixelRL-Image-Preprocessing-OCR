@@ -39,7 +39,7 @@ def main():
 
     # Hyperparams
     IMG_SIZE = (63, 63)
-    BATCH_SIZE = 31
+    BATCH_SIZE = 64
     NUM_WORKERS = 1
     # NUM_WORKERS = 15
     # NUM_WORKERS = 30
@@ -58,7 +58,7 @@ def main():
     MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
     TARGET_DIR = f"./models/{MODEL_NAME}"
 
-    mp.set_start_method('spawn', force=True)
+    # mp.set_start_method('spawn', force=True)
 
     # device agnostic code
     # device = "cpu"
@@ -105,7 +105,7 @@ def main():
     global_avg_test_rewards = mp.Array('d', len(train_dataloader))
 
     train_start = time.time()
-    fcn, ep = load_checkpoint(TARGET_DIR, fcn)
+    fcn, ep = load_checkpoint(TARGET_DIR, fcn, device)
 
     # 0: local | 1: koyeb | 2: lambda
     processes_running = mp.Array('i',3)
@@ -174,50 +174,50 @@ def main():
         ep += 1
     train_stop = time.time()
 
-    workers=[]
-    process_not_completed = [i for i in range(len(train_dataloader))]
-    torch.cuda.empty_cache()
-    while process_not_completed:
-        for b, (X, y) in enumerate(test_dataloader):
-            if b in process_not_completed:
-                if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
-                        [w.start() for w in workers]
-                        [w.join() for w in workers]
-                        success_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode == 0]
-                        workers = []
-                        torch.cuda.empty_cache()
-                        if success_processes:
-                            process_not_completed = [p for p in process_not_completed if p not in success_processes]
+    # workers=[]
+    # process_not_completed = [i for i in range(len(train_dataloader))]
+    # torch.cuda.empty_cache()
+    # while process_not_completed:
+    #     for b, (X, y) in enumerate(test_dataloader):
+    #         if b in process_not_completed:
+    #             if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+    #                     [w.start() for w in workers]
+    #                     [w.join() for w in workers]
+    #                     success_processes = [(i, w) for i, w in enumerate(workers) if w.exitcode == 0]
+    #                     workers = []
+    #                     torch.cuda.empty_cache()
+    #                     if success_processes:
+    #                         process_not_completed = [p for p in process_not_completed if p not in success_processes]
 
-                workers.append(Tester(
-                                process_idx=b,
-                                model=fcn,
-                                optimizer=optimizer,
-                                X=X,
-                                y=y,
-                                episode_size=EPISODE_SIZE,
-                                lr=LEARNING_RATE,
-                                gamma=GAMMA,
-                                move_range=MOVE_RANGE,
-                                img_size=IMG_SIZE,
-                                batch_size=BATCH_SIZE,
-                                device=device,
-                                logger=logger,
-                                global_avg_test_rewards=global_avg_test_rewards
-                            ))
-    test_stop = time.time()
+    #             workers.append(Tester(
+    #                             process_idx=b,
+    #                             model=fcn,
+    #                             optimizer=optimizer,
+    #                             X=X,
+    #                             y=y,
+    #                             episode_size=EPISODE_SIZE,
+    #                             lr=LEARNING_RATE,
+    #                             gamma=GAMMA,
+    #                             move_range=MOVE_RANGE,
+    #                             img_size=IMG_SIZE,
+    #                             batch_size=BATCH_SIZE,
+    #                             device=device,
+    #                             logger=logger,
+    #                             global_avg_test_rewards=global_avg_test_rewards
+    #                         ))
+    # test_stop = time.time()
 
     print(f"\nTRAIN BEST REWARD: {np.mean(global_avg_train_rewards)}\n\nTEST BEST REWARD: {np.mean(global_avg_test_rewards)}")
     print(f"\nTRAIN TIME: {train_stop - train_start}")
-    print(f"\nTEST TIME: {test_stop - train_stop}")
-    print(f"\nTOTAL TIME: {test_stop - train_start}")
+    # print(f"\nTEST TIME: {test_stop - train_stop}")
+    # print(f"\nTOTAL TIME: {test_stop - train_start}")
 
     save_model(model=fcn,
                target_dir=TARGET_DIR,
                model_name=MODEL_NAME)
     
 
-def load_checkpoint(target_dir, model):
+def load_checkpoint(target_dir, model, device):
     checkpoints_paths = sorted(list(Path(target_dir).rglob('checkpoint*')))
     if len(checkpoints_paths) == 0:
         return model, 0
@@ -230,7 +230,7 @@ def load_checkpoint(target_dir, model):
             i = checkpoint_i
             last_checkpoint = checkpoint
 
-    model.load_state_dict(torch.load(last_checkpoint))
+    model.load_state_dict(torch.load(last_checkpoint, map_location=torch.device(device)))
 
     return model, i
 
