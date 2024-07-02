@@ -26,7 +26,6 @@ def train(
             gamma: float,
             move_range:int,
             global_avg_train_rewards,
-            running_processes,
             logger:logging.Logger,
             img_size:tuple[int,int]=(481, 321),
             batch_size:int=32,
@@ -44,8 +43,6 @@ def train(
                         logger=logger)
 
     state = State((batch_size, 1, img_size[0], img_size[1]), move_range, model_hidden_units=model_hidden_units)
-    # lambda_client = None
-
 
     print(f"[{process_idx}] Start Train")
 

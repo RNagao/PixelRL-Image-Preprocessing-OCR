@@ -160,7 +160,7 @@ class PixelWiseAgent():
 
         print(f'[{process_idx}] Update')
 
-        self.shared_model.load_state_dict(self.shared_model.state_dict())
+        # self.model.load_state_dict(self.shared_model.state_dict())
         self.clear_memory()
 
         self.t_start = self.t
@@ -196,16 +196,6 @@ class PixelWiseAgent():
 
         return action.detach().cpu().numpy(), inner_state.detach().cpu(), torch.exp(log_action_prob).detach().cpu()
 
-    def act(self, obs):
-        self.shared_model.eval()
-        with torch.inference_mode():
-            state_var = obs.to(self.device)
-            pout, _ = self.shared_model(state_var)
-            if self.act_deterministically:
-                return torch.argmax(pout.detach()).cpu().numpy()
-            else:
-                dist = Categorical(pout.permute([0, 2, 3, 1]))
-                return dist.sample().detach().cpu().numpy()
 
     def stop_episode_and_train(self, state_var, reward, done=False, process_idx=0):
         print(f'[{process_idx}] Stop and Train')

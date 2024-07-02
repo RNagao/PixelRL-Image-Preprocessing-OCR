@@ -22,6 +22,7 @@ chainer = "*"
 torchaudio = "*"
 requests = "*"
 boto3 = "*"
+pandas = "*"
 
 [dev-packages]
 

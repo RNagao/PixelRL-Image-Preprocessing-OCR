@@ -17,14 +17,14 @@ from src.dataset import create_datasets, create_dataloaders
 # from src.train import Trainer
 from src.train import train
 
-from src.test import Tester
+from src.test import test
 from src.share_optim import SharedAdam
 from src.state import State
 from src.utils import save_model
 
 def main():
     # Setup logger
-    multiprocessing_logging.install_mp_handler()
+    # multiprocessing_logging.install_mp_handler()
     logger = mp.get_logger()
     # console = logging.StreamHandler()
     # formatter = logging.Formatter('%(name)-16s: %(filename)s %(levelname)-8s %(message)s')
@@ -39,7 +39,7 @@ def main():
 
     # Hyperparams
     IMG_SIZE = (63, 63)
-    BATCH_SIZE = 64
+    BATCH_SIZE = 32
     NUM_WORKERS = 1
     # NUM_WORKERS = 15
     # NUM_WORKERS = 30
@@ -55,7 +55,7 @@ def main():
     EPISODE_SIZE= 5
     N_EPISODES = 30000
 
-    MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
+    MODEL_NAME = f"fcn_with_pretrained_pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
     TARGET_DIR = f"./models/{MODEL_NAME}"
 
     # mp.set_start_method('spawn', force=True)
@@ -75,9 +75,9 @@ def main():
     fcn = FCN(n_actions=N_ACTIONS,
                num_channels=INPUT_SHAPE,
                hidden_units=HIDDEN_UNITS).to(device)
-    fcn.load_state_dict(torch.load("./torch_initweight/sig25_gray.pth"))
+    fcn.load_state_dict(torch.load("./torch_initweight/pixelrl.pth"))
     
-    fcn.share_memory()
+    # fcn.share_memory()
 
     print("\n\nMODEL SUMMARY")
     # summary(model=fcn,
@@ -89,7 +89,7 @@ def main():
 
     # setup optimizer
     optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
-    optimizer.share_memory()
+    # optimizer.share_memory()
 
     # setup agent
 
