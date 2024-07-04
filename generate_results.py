@@ -50,17 +50,19 @@ def main():
     HIDDEN_UNITS = 64
     OUTPUT_SHAPE = INPUT_SHAPE
 
-    EPISODE_SIZE= 5
+    EPISODE_SIZE= 3
 
     MODEl_PATHS = [
          "./torch_initweight/pixelrl.pth",
-         "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma.pth/checkpoint_169.pth"
+         "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma/checkpoint_200.pth",
+         "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma/checkpoint_250.pth",
+         "./models/fcn_30000eps_5steps_0.001lr_0.95gamma/checkpoint_101.pth"
     ]
 
 
     # device agnostic code
-    device = "cpu"
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create dataloaders
     train_dataset, test_dataset = create_datasets(IMG_SIZE, image_channels=INPUT_SHAPE)
@@ -78,22 +80,33 @@ def main():
     print(f"\nTRAINNING DEVICE: {device}")
     print(f"TEST DATALOADER SIZE: {len(test_dataloader)}\n")
 
-    results = {}
+    results = {"default": []}
+    results_determiniscally = {"default": []}
     torch.cuda.empty_cache()
     for b, (X, y) in tqdm(enumerate(test_dataloader)):
         state = State(X.shape, MOVE_RANGE, model_hidden_units=HIDDEN_UNITS)
         raw_x = X.cpu().numpy()
         raw_n = np.zeros(raw_x.shape, dtype=np.float32)
         state.reset(raw_x, raw_n)
-        if "default" not in results.keys():
-            results["default"] = []
         results["default"].append(calculate_reward(state.image, y))
-        for model_path in MODEl_PATHS:
-            model_name = model_path.split("/")[-1].split(".")[0]
-            if model_name not in results.keys():
+        results_determiniscally["default"].append(calculate_reward(state.image, y))
+        
+    for model_path in MODEl_PATHS:
+        model_name = "/".join(model_path.split("/")[-2:])
+        if model_name not in results.keys():
                 results[model_name] = []
-            fcn.load_state_dict(torch.load(model_path))
+                results_determiniscally[model_name] = []
+        fcn.load_state_dict(torch.load(model_path))
+
+        for b, (X, y) in tqdm(enumerate(test_dataloader)):
             results[model_name].append(test(model=fcn,
+                                       X=X,
+                                       y=y,
+                                       episode_size=EPISODE_SIZE,
+                                       move_range=MOVE_RANGE,
+                                       device=device
+                                       ))
+            results_determiniscally[model_name].append(test(model=fcn,
                                        X=X,
                                        y=y,
                                        episode_size=EPISODE_SIZE,
@@ -102,7 +115,9 @@ def main():
                                        ))
 
     df = pd.DataFrame(results)
+    df_det = pd.DataFrame(results_determiniscally)
     df.to_csv("results.csv")
+    df_det.to_csv("results_det.csv")
 
 if __name__ == "__main__":
     main()
