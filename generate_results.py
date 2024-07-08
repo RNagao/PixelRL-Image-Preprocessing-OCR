@@ -38,7 +38,7 @@ def main():
     # logger.setLevel(logging.DEBUG)
 
     # Hyperparams
-    IMG_SIZE = (63, 63)
+    IMG_SIZE = (256, 256)
     BATCH_SIZE = 32
     NUM_WORKERS = 1
     # NUM_WORKERS = 15
@@ -56,13 +56,13 @@ def main():
          "./torch_initweight/pixelrl.pth",
          "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma/checkpoint_200.pth",
          "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma/checkpoint_250.pth",
-         "./models/fcn_30000eps_5steps_0.001lr_0.95gamma/checkpoint_101.pth"
+         "./models/fcn_with_pretrained_pixelrl_30000eps_5steps_0.001lr_0.95gamma/checkpoint_297.pth",
     ]
 
 
     # device agnostic code
-    # device = "cpu"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Create dataloaders
     train_dataset, test_dataset = create_datasets(IMG_SIZE, image_channels=INPUT_SHAPE)
@@ -116,8 +116,8 @@ def main():
 
     df = pd.DataFrame(results)
     df_det = pd.DataFrame(results_determiniscally)
-    df.to_csv("results.csv")
-    df_det.to_csv("results_det.csv")
+    df.to_csv(f"results_{IMG_SIZE}size.csv")
+    df_det.to_csv(f"results_det_{IMG_SIZE}.csv")
 
 if __name__ == "__main__":
     main()
