@@ -19,10 +19,16 @@ TEST_BOX_PATH = DATA_PATH / "test/box"
 class ImageCustomDataset(Dataset):
     def __init__(self,
                 images_dir: str,
-                asserts_dir: str,
+                asserts_dir: str|None,
                 transform=None) -> None:
-        self.images_paths = list(Path(images_dir).glob("*.jpg"))
-        self.asserts_paths = list(Path(asserts_dir).glob("*.txt"))
+        extensoes = ["*.jpg", "*.bmp", "*.png"]
+        self.images_paths = []
+        for ext in extensoes:
+            self.images_paths.extend(list(Path(images_dir).glob(ext)))
+        if asserts_dir is None:
+            self.asserts_paths = None
+        else:
+            self.asserts_paths = list(Path(asserts_dir).glob("*.txt"))
         self.transform = transform
 
     def load_image(self, index: int) -> Image.Image:
@@ -46,22 +52,30 @@ class ImageCustomDataset(Dataset):
         "Returns one sample image and it's text assert (X, y)"
         img = self.load_image(index)
 
+        if self.asserts_paths is None:
+            item_assert = ""
+        else:
+            item_assert = self.extract_text_from_assert(index)
+
         if self.transform:
-            return self.transform(img), self.extract_text_from_assert(index)
+            return self.transform(img), item_assert
 
-        return img, self.extract_text_from_assert(index)
+        return img, item_assert
 
 
-def create_datasets(img_size: tuple[int, int], image_channels:int, num_augments:int=5):
+def create_datasets(img_size: tuple[int, int]|None, image_channels:int, num_augments:int=5):
     # Construcao dos datasets
     train_datasets = []
     test_datasets = []
 
-    original_transform = transforms.Compose([
-        transforms.Resize(img_size),
+    transforms_list = [
         transforms.Grayscale(num_output_channels=image_channels),
         transforms.ToTensor()
-    ])
+    ]
+    if img_size is not None:
+        transforms_list.insert(0, transforms.Resize(img_size))
+
+    original_transform = transforms.Compose(transforms_list)
 
     train_datasets.append(ImageCustomDataset(images_dir=TRAIN_IMAGES_PATH,
                                     asserts_dir=TRAIN_BOX_PATH,
@@ -82,12 +96,15 @@ def create_datasets(img_size: tuple[int, int], image_channels:int, num_augments:
     size_list_transforms = len(list_of_transforms)
 
     for _ in range(num_augments):
-        random_transform = transforms.Compose([
-            transforms.Resize(img_size),
+        transforms_list = [
             transforms.Grayscale(num_output_channels=image_channels),
             *[list_of_transforms[random.randint(0, size_list_transforms - 1)] for _ in range(random.randint(1, 7))],
             transforms.ToTensor()
-        ])
+        ]
+        if img_size is not None:
+            transforms_list.insert(0, transforms.Resize(img_size))
+
+        random_transform = transforms.Compose(transforms_list)
         print(random_transform)
 
         train_datasets.append(ImageCustomDataset(images_dir=TRAIN_IMAGES_PATH,

@@ -55,7 +55,7 @@ def main():
     EPISODE_SIZE= 5
     N_EPISODES = 30000
 
-    MODEL_NAME = f"fcn_with_pretrained_pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma.pth"
+    MODEL_NAME = f"fcn_with_pretrained_pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
     TARGET_DIR = f"./models/{MODEL_NAME}"
 
     # mp.set_start_method('spawn', force=True)
@@ -111,6 +111,7 @@ def main():
     processes_running = mp.Array('i',3)
 
     while ep < N_EPISODES:
+        ep_start = time.time()
         for b, (X, y) in tqdm(enumerate(train_dataloader)):
             train(process_idx=b,
                     model=fcn,
@@ -127,8 +128,7 @@ def main():
                     device=device,
                     logger=logger,
                     model_hidden_units=HIDDEN_UNITS,
-                    global_avg_train_rewards=global_avg_train_rewards,
-                    running_processes=processes_running)
+                    global_avg_train_rewards=global_avg_train_rewards)
     
     #     process_not_completed = [i for i in range(len(train_dataloader))]
     #     torch.cuda.empty_cache()
@@ -166,7 +166,7 @@ def main():
     #                     if success_processes:
     #                         process_not_completed = [p for p in process_not_completed if p not in success_processes]
     #                         success_processes = []
-        print(f"EP train time: {time.time() - train_start}")
+        print(f"EP train time: {time.time() - ep_start}")
         save_model(model=fcn,
                target_dir=TARGET_DIR,
                model_name=f"checkpoint_{ep}.pth")
@@ -214,7 +214,7 @@ def main():
 
     save_model(model=fcn,
                target_dir=TARGET_DIR,
-               model_name=MODEL_NAME)
+               model_name=f"{MODEL_NAME}.pth")
     
 
 def load_checkpoint(target_dir, model, device):
