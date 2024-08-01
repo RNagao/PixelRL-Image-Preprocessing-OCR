@@ -11,6 +11,7 @@ from torchvision import transforms
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 from src.models import *
 from src.agent import PixelWiseAgent
+from src.share_optim import SharedAdam
 from torch.utils.data import DataLoader, ConcatDataset
 from src.dataset import ImageCustomDataset
 # from src.train import Trainer
@@ -21,7 +22,7 @@ from src.utils import save_model
 
 # Hyperparams
 IMG_SIZE = (63, 63)
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 NUM_WORKERS = 1
 NUM_WORKERS = os.cpu_count() - 1
 # NUM_WORKERS = 30
@@ -37,7 +38,7 @@ GAMMA = 0.95
 EPISODE_SIZE= 5
 N_EPISODES = 30000
 
-MODEL_NAME = f"pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
+MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
 TARGET_DIR = f"./models/{MODEL_NAME}"
 
 def main():
@@ -72,6 +73,7 @@ def main():
 
     # setup optimizer
     optimizer = optim.Adam(params=fcn.parameters(), lr=LEARNING_RATE)
+    # optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
     # optimizer.share_memory()
 
     # setup agent
@@ -84,25 +86,61 @@ def main():
     fcn.train()
 
     train_start = time.time()
-    fcn, ep = load_checkpoint(TARGET_DIR, fcn, device)
+    fcn, ep_load = load_checkpoint(TARGET_DIR, fcn, device)
 
-    for ep in tqdm(range(N_EPISODES), desc="EPISODES"):
+    for ep in tqdm(range(ep_load, N_EPISODES), desc="EPISODES", initial=ep_load, total=N_EPISODES):
         ep_start = time.time()
         for b, (X, y) in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="DATALOADER"):
-            train_pixelwise_reward(process_idx=b,
-                    model=fcn,
-                    optimizer=optimizer,
-                    X=X,
-                    n_episodes=ep,
-                    episode_size=EPISODE_SIZE,
-                    lr=LEARNING_RATE,
-                    gamma=GAMMA,
-                    move_range=MOVE_RANGE,
-                    img_size=IMG_SIZE,
-                    batch_size=BATCH_SIZE,
-                    device=device,
-                    logger=None,
-                    model_hidden_units=HIDDEN_UNITS)
+            train_pixelwise_reward(
+                        b,
+                        fcn,
+                        optimizer,
+                        X,
+                        ep,
+                        EPISODE_SIZE,
+                        LEARNING_RATE,
+                        GAMMA,
+                        MOVE_RANGE,
+                        None,
+                        IMG_SIZE,
+                        BATCH_SIZE,
+                        HIDDEN_UNITS,
+                        device
+                        )
+
+
+        # process_not_completed = [i for i in range(len(train_dataloader))]
+        # torch.cuda.empty_cache()
+        # while len(process_not_completed) > 0:
+        #     workers = []
+        #     for b, (X, y) in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="DATALOADER"):
+        #         p = mp.Process(target=train_pixelwise_reward, args=(
+        #                 b,
+        #                 fcn,
+        #                 optimizer,
+        #                 X,
+        #                 ep,
+        #                 EPISODE_SIZE,
+        #                 LEARNING_RATE,
+        #                 GAMMA,
+        #                 MOVE_RANGE,
+        #                 None,
+        #                 IMG_SIZE,
+        #                 BATCH_SIZE,
+        #                 HIDDEN_UNITS,
+        #                 device
+        #                 ))
+        #         p.start()
+        #         workers.append(p)
+        #         if len(workers) >= NUM_WORKERS or len(workers) == len(process_not_completed):
+        #             [w.join() for w in workers]
+        #             success_processes = [w.process_idx for w in workers if w.exitcode == 0]
+        #             print(f"SUCCESS: {success_processes}")
+        #             workers = []
+        #             torch.cuda.empty_cache()
+        #             if any(success_processes):
+        #                 process_not_completed = [p for p in process_not_completed if p not in success_processes]
+        #                 success_processes = []
 
         print(f"EP train time: {time.time() - ep_start}")
         if ep % 10 == 0:

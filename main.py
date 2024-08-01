@@ -6,6 +6,7 @@ import numpy as np
 import time
 import multiprocessing_logging
 from torchinfo import summary
+from torch import optim
 from logging import getLogger
 from pathlib import Path
 from tqdm import tqdm
@@ -39,7 +40,7 @@ def main():
 
     # Hyperparams
     IMG_SIZE = (63, 63)
-    BATCH_SIZE = 32
+    BATCH_SIZE = 64
     NUM_WORKERS = 1
     # NUM_WORKERS = 15
     # NUM_WORKERS = 30
@@ -55,7 +56,7 @@ def main():
     EPISODE_SIZE= 5
     N_EPISODES = 30000
 
-    MODEL_NAME = f"fcn_with_pretrained_pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
+    MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
     TARGET_DIR = f"./models/{MODEL_NAME}"
 
     # mp.set_start_method('spawn', force=True)
@@ -75,7 +76,7 @@ def main():
     fcn = FCN(n_actions=N_ACTIONS,
                num_channels=INPUT_SHAPE,
                hidden_units=HIDDEN_UNITS).to(device)
-    fcn.load_state_dict(torch.load("./torch_initweight/pixelrl.pth"))
+    fcn.load_state_dict(torch.load("./torch_initweight/pixelrl.pth", map_location=torch.device(device)))
     
     # fcn.share_memory()
 
@@ -88,7 +89,8 @@ def main():
     #     device=device)
 
     # setup optimizer
-    optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(params=fcn.parameters(), lr=LEARNING_RATE)
+    # optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
     # optimizer.share_memory()
 
     # setup agent
@@ -108,7 +110,7 @@ def main():
     fcn, ep = load_checkpoint(TARGET_DIR, fcn, device)
 
     # 0: local | 1: koyeb | 2: lambda
-    processes_running = mp.Array('i',3)
+    # processes_running = mp.Array('i',3)
 
     while ep < N_EPISODES:
         ep_start = time.time()
