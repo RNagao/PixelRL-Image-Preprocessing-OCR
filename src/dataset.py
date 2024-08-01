@@ -10,7 +10,7 @@ from torchvision import transforms
 from typing import Tuple
 from pathlib import Path
 
-DATA_PATH = Path("SROIE2019")
+DATA_PATH = Path("datasets/SROIE2019")
 TRAIN_IMAGES_PATH = DATA_PATH / "train/img"
 TRAIN_BOX_PATH = DATA_PATH / "train/box"
 TEST_IMAGES_PATH = DATA_PATH / "test/img"

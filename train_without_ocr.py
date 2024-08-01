@@ -13,6 +13,7 @@ import matplotlib.animation as animation
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 from src.models import *
 from src.agent import PixelWiseAgent
+from src.share_optim import SharedAdam
 from torch.utils.data import DataLoader, ConcatDataset
 from src.dataset import ImageCustomDataset
 # from src.train import Trainer
@@ -23,7 +24,7 @@ from src.utils import save_model
 
 # Hyperparams
 IMG_SIZE = (63, 63)
-BATCH_SIZE = 32
+BATCH_SIZE = 128
 NUM_WORKERS = 1
 NUM_WORKERS = os.cpu_count() - 1
 # NUM_WORKERS = 30
@@ -74,6 +75,7 @@ def main():
 
     # setup optimizer
     optimizer = optim.Adam(params=fcn.parameters(), lr=LEARNING_RATE)
+    # optimizer = SharedAdam(params=fcn.parameters(), lr=LEARNING_RATE)
     # optimizer.share_memory()
 
     # setup agent
