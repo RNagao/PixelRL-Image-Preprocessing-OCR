@@ -346,6 +346,8 @@ class PixelWiseAgentWithoutOCR():
 
         self.t_start = self.t
 
+        return total_loss
+
     def act_and_train(self, state_var, reward, process_idx=0):
         # print(f"[{process_idx}] Act and train\nt: {self.t} | t_start: {self.t_start} | t_max: {self.t_max}")
         state_var = torch.from_numpy(state_var).to(self.device)
@@ -382,9 +384,9 @@ class PixelWiseAgentWithoutOCR():
 
         self.past_rewards[self.t-1] =reward
         if done:
-            self.update(None, len(reward), process_idx=process_idx)
+            return self.update(None, len(reward), process_idx=process_idx)
         else:
-            self.update(state_var, len(reward), process_idx=process_idx)
+            return self.update(state_var, len(reward), process_idx=process_idx)
 
     def get_statistics(self):
         return {

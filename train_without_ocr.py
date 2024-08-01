@@ -7,6 +7,8 @@ from torchinfo import summary
 from pathlib import Path
 from tqdm import tqdm
 from torchvision import transforms
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 from src.models import *
@@ -37,7 +39,7 @@ GAMMA = 0.95
 EPISODE_SIZE= 5
 N_EPISODES = 30000
 
-MODEL_NAME = f"pixelrl_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
+MODEL_NAME = f"pixelrl_upLR_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
 TARGET_DIR = f"./models/{MODEL_NAME}"
 
 def main():
@@ -84,12 +86,19 @@ def main():
     fcn.train()
 
     train_start = time.time()
-    fcn, ep = load_checkpoint(TARGET_DIR, fcn, device)
+    fcn, ep_load = load_checkpoint(TARGET_DIR, fcn, device)
 
-    for ep in tqdm(range(N_EPISODES), desc="EPISODES"):
+    rewards = []
+    losses = []
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    plt.title(MODEL_NAME)
+    plt.ion()
+
+    for ep in tqdm(range(ep_load, N_EPISODES), desc="EPISODES", initial=ep_load, total=N_EPISODES):
         ep_start = time.time()
         for b, (X, y) in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="DATALOADER"):
-            train_pixelwise_reward(process_idx=b,
+            reward, loss = train_pixelwise_reward(process_idx=b,
                     model=fcn,
                     optimizer=optimizer,
                     X=X,
@@ -103,14 +112,27 @@ def main():
                     device=device,
                     logger=None,
                     model_hidden_units=HIDDEN_UNITS)
+            rewards.append(reward.item())
+            losses.append(loss.item())
+
+            if len(rewards) > 500:
+                rewards.pop(0)
+                losses.pop(0)
+
+            atualizar_graficos(ax1, ax2, rewards, losses)
 
         print(f"EP train time: {time.time() - ep_start}")
+        update_learning_rate(optimizer, ep, N_EPISODES, LEARNING_RATE)
         if ep % 10 == 0:
             save_model(model=fcn,
                 target_dir=TARGET_DIR,
                 model_name=f"checkpoint_{ep}.pth")
             print(f"SAVED CHECKPOINT {ep}")
+
     train_stop = time.time()
+
+    plt.ioff()
+    plt.show()
 
     print(f"\nTRAIN TIME: {train_stop - train_start}")
 
@@ -136,6 +158,7 @@ def load_checkpoint(target_dir, model, device):
 
     return model, i
 
+
 def create_train_dataset(datasets_path_dir):
     transforms_list = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
@@ -157,6 +180,36 @@ def create_train_dataset(datasets_path_dir):
                             num_workers=NUM_WORKERS)
     return dataloader
 
+
+def atualizar_graficos(ax1, ax2, rewards, losses):
+    ax1.clear()
+    ax2.clear()
+    
+    # Atualiza o gráfico de recompensas
+    ax1.plot(rewards, label='Recompensa', color='blue')
+    ax1.set_xlabel('Iteração')
+    ax1.set_ylabel('Recompensa')
+    ax1.set_title('Recompensa em Tempo Real')
+    ax1.legend()
+    
+    # Atualiza o gráfico de erros
+    ax2.plot(losses, label='Erro', color='red')
+    ax2.set_xlabel('Iteração')
+    ax2.set_ylabel('Erro')
+    ax2.set_title('Erro em Tempo Real')
+    ax2.legend()
+    
+    plt.draw()
+    plt.pause(0.01)  # Pausa para atualizar o gráfico
+
+def update_learning_rate(optimizer, episode, total_episodes, initial_lr):
+    """Atualiza a taxa de aprendizado conforme a política polinomial."""
+    # Calcula o fator de decaimento
+    lr = initial_lr * (1 - episode / total_episodes) ** 0.9
+    
+    # Atualiza a taxa de aprendizado do otimizador
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
 
 if __name__ == "__main__":
     main()

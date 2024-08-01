@@ -218,6 +218,7 @@ def train_pixelwise_reward(
 
         sum_reward += np.mean(reward) * np.power(gamma, t)
 
-    agent.stop_episode_and_train(current_image_tensor, reward, True, process_idx=process_idx)
+    loss = agent.stop_episode_and_train(current_image_tensor, reward, True, process_idx=process_idx)
     # agent.optimizer.lr = lr*((1-episode/n_episodes)**0.9)
     print(f"[{process_idx}] Train total reward: {sum_reward}")
+    return sum_reward, loss
