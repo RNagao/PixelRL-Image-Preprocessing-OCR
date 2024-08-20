@@ -71,9 +71,9 @@ class FCN(nn.Module):
     def pi_and_v(self, x):
         conv = self.conv(x[:,0:self.num_channels:,:])
         p = self.diconv1_p(conv)
-        p = F.relu(p)
+        # p = F.relu(p)
         p = self.diconv2_p(p)
-        p = F.relu(p)
+        # p = F.relu(p)
         GRU_in = p
         ht = x[:, -self.hidden_units:, :, :]
         z_t = torch.sigmoid(self.conv7_Wz(GRU_in) + self.conv7_Uz(ht))
@@ -84,8 +84,66 @@ class FCN(nn.Module):
 
 
         v = self.diconv1_v(conv)
-        v = F.relu(v)
+        # v = F.relu(v)
         v = self.diconv2_v(v)
-        v = F.relu(v)
+        # v = F.relu(v)
         value = self.value(v)
         return policy, value, h_t
+
+
+class FCN2(nn.Module):
+    def __init__(self, 
+                 n_actions: int,
+                 num_channels: int = 1,
+                 hidden_units: int = 64):
+        super(FCN2, self).__init__()
+        self.action_n = n_actions
+        self.num_channels = num_channels
+        self.hidden_units = hidden_units
+        self.conv1 = nn.Conv2d(in_channels=num_channels, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=True)
+        self.diconv2 = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(2, 2), dilation=2, bias=True)
+        self.diconv3 = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(3, 3), dilation=3, bias=True)
+        self.diconv4 = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(4, 4), dilation=4, bias=True)
+
+        self.diconv5_pi = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(3, 3), dilation=3,
+                                   bias=True)
+        self.diconv6_pi = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(2, 2), dilation=2,
+                                   bias=True)
+        self.conv7_Wz = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+        self.conv7_Uz = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+        self.conv7_Wr = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+        self.conv7_Ur = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+        self.conv7_W = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+        self.conv7_U = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(1, 1), bias=False)
+
+        self.conv8_pi = nn.Sequential(
+            nn.Conv2d(in_channels=hidden_units, out_channels=self.action_n, kernel_size=3, stride=1, padding=(1, 1), bias=True),
+            nn.Softmax(dim=1)
+        )
+
+        self.diconv5_V = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(3, 3), dilation=3,
+                                   bias=True)
+        self.diconv6_V = nn.Conv2d(in_channels=hidden_units, out_channels=hidden_units, kernel_size=3, stride=1, padding=(2, 2), dilation=2,
+                                   bias=True)
+        self.conv7_V = nn.Conv2d(in_channels=hidden_units, out_channels=1, kernel_size=3, stride=1, padding=(1, 1), bias=True)
+
+
+    def pi_and_v(self, x):
+        h = F.relu(self.conv1(x[:,0:self.num_channels,:,:]))
+        h = self.diconv2(h)
+        h = self.diconv3(h)
+        h = self.diconv4(h)
+        h_pi = self.diconv5_pi(h)
+        x_t = self.diconv6_pi(h_pi)
+        h_t1 = x[:,-self.hidden_units:,:,:]
+        z_t = F.sigmoid(self.conv7_Wz(x_t)+self.conv7_Uz(h_t1))
+        r_t = F.sigmoid(self.conv7_Wr(x_t)+self.conv7_Ur(h_t1))
+        h_tilde_t = F.tanh(self.conv7_W(x_t)+self.conv7_U(r_t*h_t1))
+        h_t = (1-z_t)*h_t1+z_t*h_tilde_t
+        pout = self.conv8_pi(h_t)
+
+        h_V = self.diconv5_V(h)
+        h_V = self.diconv6_V(h_V)
+        vout = self.conv7_V(h_V)
+       
+        return pout, vout, h_t

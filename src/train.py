@@ -166,59 +166,38 @@ def local_levenshtein_dist(current_image, y):
 
 
 def train_pixelwise_reward(
+        agent,
+        state,
             process_idx: int,
-            model: torch.nn.Module,
-            optimizer: torch.optim.Optimizer,
             X,
-            n_episodes: int,
             episode_size: int,
-            lr: int,
             gamma: float,
-            move_range:int,
-            logger:logging.Logger,
-            img_size:tuple[int,int]=(481, 321),
-            batch_size:int=32,
-            model_hidden_units:int=64,
             device:torch.device="cpu"):
-
-    agent = PixelWiseAgentWithoutOCR(model=model,
-                        optimizer=optimizer,
-                        lr=lr,
-                        t_max=episode_size,
-                        gamma=gamma,
-                        batch_size=batch_size,
-                        img_size=img_size,
-                        device=device,
-                        logger=logger)
-
-    state = State((batch_size, 1, img_size[0], img_size[1]), move_range, model_hidden_units=model_hidden_units)
 
     # input image
     raw_x = X.cpu().numpy()
-    label = copy.deepcopy(raw_x)
     # print(f"X shape: {raw_x.shape}")
     # generate noise
     # raw_n = np.zeros(raw_x.shape, dtype=np.float32)
-    raw_n = np.random.normal(0, 15, label.shape).astype(label.dtype)/255
+    raw_n = np.random.normal(0, 15, raw_x.shape).astype(raw_x.dtype)/255
     # initialize the current state and reward
     state.reset(raw_x, raw_n)
     agent.clear_memory()
 
     sum_reward = 0
-    reward = np.zeros(label.shape, label.dtype)
+    reward = np.zeros(raw_x.shape, raw_x.dtype)
 
     for t in range(0, episode_size):
-        previous_image = np.clip(state.image.copy(), a_min=0., a_max=1.)
+        previous_image = state.image.copy()
         current_image_tensor = state.tensor
-        action, inner_state, action_prob = agent.act_and_train(current_image_tensor, reward)
+        action, inner_state = agent.act_and_train(current_image_tensor, reward)
 
         state.step(action, inner_state)
 
-        reward = np.square(label - previous_image) * 255 - np.square(label - state.image) * 255
+        reward = np.square(raw_x - previous_image) * 255 - np.square(raw_x - state.image) * 255
 
         sum_reward += np.mean(reward) * np.power(gamma, t)
 
     loss = agent.stop_episode_and_train(current_image_tensor, reward, True, process_idx=process_idx)
-    # agent.optimizer.lr = lr*((1-episode/n_episodes)**0.9)
-    print(f"[{process_idx}] Train total reward: {sum_reward}")
+    print(f"[{process_idx}] Train total reward: {sum_reward * 255}")
     return sum_reward, loss

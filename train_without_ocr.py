@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import torch.multiprocessing as mp
 import numpy as np
@@ -16,6 +17,8 @@ from src.agent import PixelWiseAgent
 from src.share_optim import SharedAdam
 from torch.utils.data import DataLoader, ConcatDataset
 from src.dataset import ImageCustomDataset
+from src.agent import PixelWiseAgent, PixelWiseAgentWithoutOCR
+from src.state import State
 # from src.train import Trainer
 import torch.optim as optim
 from src.train import train_pixelwise_reward
@@ -23,8 +26,8 @@ from src.train import train_pixelwise_reward
 from src.utils import save_model
 
 # Hyperparams
-IMG_SIZE = (63, 63)
-BATCH_SIZE = 128
+IMG_SIZE = (70, 70)
+BATCH_SIZE = 32
 NUM_WORKERS = 1
 NUM_WORKERS = os.cpu_count() - 1
 # NUM_WORKERS = 30
@@ -40,7 +43,7 @@ GAMMA = 0.95
 EPISODE_SIZE= 5
 N_EPISODES = 30000
 
-MODEL_NAME = f"pixelrl_upLR_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
+MODEL_NAME = f"pixelrl_2_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
 TARGET_DIR = f"./models/{MODEL_NAME}"
 
 def main():
@@ -58,10 +61,11 @@ def main():
     train_dataloader = create_train_dataset(datasets_paths)
 
     # create model
-    fcn = FCN(n_actions=N_ACTIONS,
+    fcn = FCN2(n_actions=N_ACTIONS,
                num_channels=INPUT_SHAPE,
                hidden_units=HIDDEN_UNITS).to(device)
-    fcn.load_state_dict(torch.load("./torch_initweight/sig25_gray.pth"))
+    load_parameters_from_npz(fcn, "./torch_initweight/pretrained_15.npz")
+    # fcn.load_state_dict(torch.load("./torch_initweight/sig25_gray.pth"))
     
     # fcn.share_memory()
 
@@ -79,6 +83,18 @@ def main():
     # optimizer.share_memory()
 
     # setup agent
+    agent = PixelWiseAgentWithoutOCR(model=fcn,
+                        optimizer=optimizer,
+                        lr=LEARNING_RATE,
+                        t_max=EPISODE_SIZE,
+                        gamma=GAMMA,
+                        batch_size=BATCH_SIZE,
+                        img_size=IMG_SIZE,
+                        device=device,
+                        logger=None
+                        )
+
+    state = State((BATCH_SIZE, 1, IMG_SIZE[0], IMG_SIZE[1]), MOVE_RANGE, model_hidden_units=HIDDEN_UNITS)
 
     # train
     print(f"\nTRAINNING DEVICE: {device}")
@@ -92,36 +108,54 @@ def main():
 
     rewards = []
     losses = []
+    rewards_ep_dict = {
+        "high": [],
+        "lower": [],
+        "mean": []
+    }
+    losses_ep_dict = {
+        "high": [],
+        "lower": [],
+        "mean": []
+    }
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+    ax1, ax2, ax3, ax4 = axs.flatten()
     plt.title(MODEL_NAME)
     plt.ion()
+    plt.grid(True)
 
+    torch.cuda.empty_cache()
     for ep in tqdm(range(ep_load, N_EPISODES), desc="EPISODES", initial=ep_load, total=N_EPISODES):
         ep_start = time.time()
+        ep_rewards = []
+        ep_losses = []
         for b, (X, y) in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="DATALOADER"):
             reward, loss = train_pixelwise_reward(process_idx=b,
-                    model=fcn,
-                    optimizer=optimizer,
-                    X=X,
-                    n_episodes=ep,
-                    episode_size=EPISODE_SIZE,
-                    lr=LEARNING_RATE,
-                    gamma=GAMMA,
-                    move_range=MOVE_RANGE,
-                    img_size=IMG_SIZE,
-                    batch_size=BATCH_SIZE,
-                    device=device,
-                    logger=None,
-                    model_hidden_units=HIDDEN_UNITS)
-            rewards.append(reward.item())
+                                                    agent=agent,
+                                                    state=state,
+                                                    X=X,
+                                                    episode_size=EPISODE_SIZE,
+                                                    gamma=GAMMA,
+                                                    device=device,
+                                                    )
+            rewards.append(reward.item() * 255)
             losses.append(loss.item())
+            ep_rewards.append(reward.item() * 255)
+            ep_losses.append(loss.item())
 
-            if len(rewards) > 500:
+            if len(rewards) > 300:
                 rewards.pop(0)
                 losses.pop(0)
 
-            atualizar_graficos(ax1, ax2, rewards, losses)
+            atualizar_graficos(ax1, ax2, ax3, ax4, rewards, losses, rewards_ep_dict, losses_ep_dict)
+
+        rewards_ep_dict["high"].append(max(ep_rewards))
+        rewards_ep_dict["lower"].append(min(ep_rewards))
+        rewards_ep_dict["mean"].append(sum(ep_rewards)/len(ep_rewards))
+        losses_ep_dict["high"].append(max(ep_losses))
+        losses_ep_dict["lower"].append(min(ep_losses))
+        losses_ep_dict["mean"].append(sum(ep_losses)/len(ep_losses))
 
         print(f"EP train time: {time.time() - ep_start}")
         update_learning_rate(optimizer, ep, N_EPISODES, LEARNING_RATE)
@@ -163,9 +197,10 @@ def load_checkpoint(target_dir, model, device):
 
 def create_train_dataset(datasets_path_dir):
     transforms_list = transforms.Compose([
+        transforms.RandomCrop(IMG_SIZE),
         transforms.Grayscale(num_output_channels=1),
-        transforms.Resize(IMG_SIZE),
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        # transforms.Normalize(mean=[0.5], std=[0.5]),
     ])
     train_datasets = []
     for dir_path in datasets_path_dir:
@@ -182,11 +217,32 @@ def create_train_dataset(datasets_path_dir):
                             num_workers=NUM_WORKERS)
     return dataloader
 
+def load_parameters_from_npz(model, npz_file):
+    # Carregar parâmetros do arquivo .npz
+    data = np.load(npz_file)
+    state_dict = model.state_dict()
 
-def atualizar_graficos(ax1, ax2, rewards, losses):
+    for key in data.keys():
+        model_key = re.sub(r"\/diconv", "", key)
+        model_key = re.sub(r"\/model", ".0", model_key)
+        model_key = re.sub(r"\/W", ".weight", model_key)
+        model_key = re.sub(r"\/b", ".bias", model_key)
+
+        if model_key in state_dict:
+            # Converter o numpy array para tensor e atribuir ao estado do modelo
+            state_dict[model_key] = torch.from_numpy(data[key])
+        else:
+            print(f"model has no key {model_key} / {key}")
+    
+    # Atualizar o estado do modelo
+    model.load_state_dict(state_dict)
+
+def atualizar_graficos(ax1, ax2, ax3, ax4, rewards, losses, rewards_ep_dict, losses_ep_dict):
     ax1.clear()
     ax2.clear()
-    
+    ax3.clear()
+    ax4.clear()
+
     # Atualiza o gráfico de recompensas
     ax1.plot(rewards, label='Recompensa', color='blue')
     ax1.set_xlabel('Iteração')
@@ -200,6 +256,22 @@ def atualizar_graficos(ax1, ax2, rewards, losses):
     ax2.set_ylabel('Erro')
     ax2.set_title('Erro em Tempo Real')
     ax2.legend()
+
+    ax3.plot(rewards_ep_dict["high"], label='Maiores Recompensa', color='green')
+    ax3.plot(rewards_ep_dict["lower"], label='Menores Recompensa', color='red')
+    ax3.plot(rewards_ep_dict["mean"], label='Media Recompensas', color='blue')
+    ax3.set_xlabel('Iteração')
+    ax3.set_ylabel('Recompensa')
+    ax3.set_title('Recompensa por Ep')
+    ax3.legend()
+
+    ax4.plot(losses_ep_dict["high"], label='Maiores Erro', color='red')
+    ax4.plot(losses_ep_dict["lower"], label='Menores Erro', color='green')
+    ax4.plot(losses_ep_dict["mean"], label='Media Erros', color='blue')
+    ax4.set_xlabel('Iteração')
+    ax4.set_ylabel('Erro')
+    ax4.set_title('Erro por Ep')
+    ax4.legend()
     
     plt.draw()
     plt.pause(0.01)  # Pausa para atualizar o gráfico

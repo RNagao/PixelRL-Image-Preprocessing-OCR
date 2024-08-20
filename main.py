@@ -56,7 +56,7 @@ def main():
     EPISODE_SIZE= 5
     N_EPISODES = 30000
 
-    MODEL_NAME = f"fcn_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
+    MODEL_NAME = f"fcn_noReLu_{N_EPISODES}eps_{EPISODE_SIZE}steps_{LEARNING_RATE}lr_{GAMMA}gamma"
     TARGET_DIR = f"./models/{MODEL_NAME}"
 
     # mp.set_start_method('spawn', force=True)

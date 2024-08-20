@@ -99,18 +99,17 @@ class PixelWiseAgent():
         else:
             print(f"[{process_idx}] State var update")
             _, vout = self.shared_model.pi_and_v(state_var)
-            R = vout.detach().to(self.device)
+            R = vout.detach().type(torch.float32).to(self.device)
 
         pi_loss = 0
         v_loss = 0
         for i in reversed(range(self.t_start, self.t)):
             R *= self.gamma
-            reward = self.past_rewards[i]
-            R += torch.from_numpy(reward[:, np.newaxis, np.newaxis, np.newaxis]).to(self.device)
+            R += torch.from_numpy(self.past_rewards[i]).to(self.device)
             if self.use_average_reward:
-                R = R - self.average_reward
+                R -= self.average_reward
             v = self.past_values[i]
-            advantage = R - v.detach()
+            advantage = R - v
             if self.use_average_reward:
                 self.average_reward += self.average_reward_tau * float(advantage.detach())
 
@@ -119,7 +118,7 @@ class PixelWiseAgent():
             entropy = self.past_action_entropy[i]
 
             # Log probability is increased proportinally to advantage
-            pi_loss -= log_prob * advantage.detach()
+            pi_loss -= log_prob * advantage.detach().type(torch.float32)
 
             # Entropy is maximized
             pi_loss -= self.beta * entropy
@@ -146,7 +145,7 @@ class PixelWiseAgent():
         # if process_idx == 0:
         #   print(f"\npi_loss:\n{pi_loss}\n\nv_loss:\n{v_loss}")
 
-        total_loss = (pi_loss + v_loss).mean()
+        total_loss = (pi_loss + torch.reshape(v_loss, pi_loss.detach().shape())).mean()
         #self.loss_tracking.append(total_loss)
         print(f"[{process_idx}] Loss: {total_loss}")
 
@@ -181,20 +180,20 @@ class PixelWiseAgent():
 
         p_trans = pout.permute([0, 2, 3, 1])
         dist = Categorical(p_trans)
-        action = dist.sample()
-        log_p = torch.log(torch.clamp(p_trans, min=1e-9, max=1-1e-9))
-        log_action_prob = torch.gather(log_p, 1, Variable(action.unsqueeze(-1))).view(n, 1, h, w)
-        entropy = -torch.sum(p_trans * log_p, dim=-1).view(n, 1, h, w)
+        action = dist.sample().detach()
+        # log_p = torch.log(torch.clamp(p_trans, min=1e-9, max=1-1e-9))
+        # log_action_prob = torch.gather(log_p, 1, Variable(action.unsqueeze(-1))).view(n, 1, h, w)
+        # entropy = -torch.sum(p_trans * log_p, dim=-1).view(n, 1, h, w)
 
-        # self.past_action_log_prob[self.t] = dist.log_prob(action).unsqueeze(dim=1).to(self.device)
-        # self.past_action_entropy[self.t] = dist.entropy().unsqueeze(dim=1).to(self.device)
-        self.past_action_log_prob[self.t] = log_action_prob
-        self.past_action_entropy[self.t] = entropy
+        self.past_action_log_prob[self.t] = dist.log_prob(action).unsqueeze(dim=1).to(self.device)
+        self.past_action_entropy[self.t] = dist.entropy().unsqueeze(dim=1).to(self.device)
+        # self.past_action_log_prob[self.t] = log_action_prob
+        # self.past_action_entropy[self.t] = entropy
         self.past_values[self.t] = vout
 
         self.t += 1
 
-        return action.detach().cpu().numpy(), inner_state.detach().cpu(), torch.exp(log_action_prob).detach().cpu()
+        return action.detach().cpu().numpy(), inner_state.detach().cpu()
 
 
     def stop_episode_and_train(self, state_var, reward, done=False, process_idx=0):
@@ -292,8 +291,10 @@ class PixelWiseAgentWithoutOCR():
         for i in reversed(range(self.t_start, self.t)):
             R *= self.gamma
             R += torch.from_numpy(self.past_rewards[i]).to(self.device)
+            if self.use_average_reward:
+                R -= self.average_reward
             v = self.past_values[i]
-            advantage = R - v.detach()
+            advantage = R - v
             if self.use_average_reward:
                 self.average_reward += self.average_reward_tau * float(advantage.detach())
 
@@ -302,7 +303,7 @@ class PixelWiseAgentWithoutOCR():
             entropy = self.past_action_entropy[i]
 
             # Log probability is increased proportinally to advantage
-            pi_loss -= log_prob * advantage.detach()
+            pi_loss -= log_prob * advantage.detach().type(torch.float32)
 
             # Entropy is maximized
             pi_loss -= self.beta * entropy
@@ -329,7 +330,7 @@ class PixelWiseAgentWithoutOCR():
         # if process_idx == 0:
         #   print(f"\npi_loss:\n{pi_loss}\n\nv_loss:\n{v_loss}")
 
-        total_loss = (pi_loss + v_loss).mean()
+        total_loss = (pi_loss + torch.reshape(v_loss, pi_loss.detach().shape)).mean()
         #self.loss_tracking.append(total_loss)
         print(f"[{process_idx}] Loss: {total_loss}")
 
@@ -364,20 +365,20 @@ class PixelWiseAgentWithoutOCR():
 
         p_trans = pout.permute([0, 2, 3, 1])
         dist = Categorical(p_trans)
-        action = dist.sample()
-        log_p = torch.log(torch.clamp(p_trans, min=1e-9, max=1-1e-9))
-        log_action_prob = torch.gather(log_p, 1, Variable(action.unsqueeze(-1))).view(n, 1, h, w)
-        entropy = -torch.sum(p_trans * log_p, dim=-1).view(n, 1, h, w)
+        action = dist.sample().detach()
+        # log_p = torch.log(torch.clamp(p_trans, min=1e-9, max=1-1e-9))
+        # log_action_prob = torch.gather(log_p, 1, Variable(action.unsqueeze(-1))).view(n, 1, h, w)
+        # entropy = -torch.sum(p_trans * log_p, dim=-1).view(n, 1, h, w)
 
-        # self.past_action_log_prob[self.t] = dist.log_prob(action).unsqueeze(dim=1).to(self.device)
-        # self.past_action_entropy[self.t] = dist.entropy().unsqueeze(dim=1).to(self.device)
-        self.past_action_log_prob[self.t] = log_action_prob
-        self.past_action_entropy[self.t] = entropy
+        self.past_action_log_prob[self.t] = dist.log_prob(action).unsqueeze(dim=1).to(self.device)
+        self.past_action_entropy[self.t] = dist.entropy().unsqueeze(dim=1).to(self.device)
+        # self.past_action_log_prob[self.t] = log_action_prob
+        # self.past_action_entropy[self.t] = entropy
         self.past_values[self.t] = vout
 
         self.t += 1
 
-        return action.detach().cpu().numpy(), inner_state.detach().cpu(), torch.exp(log_action_prob).detach().cpu()
+        return action.detach().cpu().numpy(), inner_state.detach().cpu()
 
 
     def stop_episode_and_train(self, state_var, reward, done=False, process_idx=0):
@@ -393,3 +394,4 @@ class PixelWiseAgentWithoutOCR():
             "average_value": self.average_value,
             "average_entropy": self.average_entropy
         }
+    
